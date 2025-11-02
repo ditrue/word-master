@@ -11,14 +11,14 @@ class PracticeQuestion {
     List<String>? options,
     this.partOfSpeech,
     this.syllableBreakpoints,
-  }) : hiddenIndices =
-           hiddenIndices ??
-           List<int>.generate(
-             word.length,
-             (int index) => index,
-             growable: false,
-           ),
+  }) : hiddenIndices = hiddenIndices ?? _generateDefaultHiddenIndices(word),
        options = options ?? List<String>.of(word.split(''), growable: false);
+
+  // 生成默认的隐藏索引：隐藏所有字母
+  static List<int> _generateDefaultHiddenIndices(String word) {
+    // 隐藏所有字母，让用户完全通过拖拽来填补
+    return List<int>.generate(word.length, (int index) => index);
+  }
 
   final String word; // 完整单词，如 dictionary
   final String translation; // 中文释义
@@ -86,16 +86,46 @@ class _PracticePageState extends State<PracticePage> {
   // 简单内置两道题以演示
   final List<PracticeQuestion> questions = <PracticeQuestion>[
     PracticeQuestion(
+      word: 'dictionary',
+      partOfSpeech: 'n.',
+      translation: '字典',
+      syllableBreakpoints: <int>[2, 6],
+    ),
+    PracticeQuestion(
+      word: 'apple',
+      partOfSpeech: 'n.',
+      translation: '苹果',
+      syllableBreakpoints: <int>[2],
+    ),
+    PracticeQuestion(
       word: 'soup',
       partOfSpeech: 'n.',
       translation: '汤',
       syllableBreakpoints: <int>[2],
     ),
     PracticeQuestion(
-      word: 'dictionary',
+      word: 'beautiful',
+      partOfSpeech: 'adj.',
+      translation: '美丽的',
+      syllableBreakpoints: <int>[3, 6],
+    ),
+    PracticeQuestion(
+      word: 'computer',
       partOfSpeech: 'n.',
-      translation: '字典',
-      syllableBreakpoints: <int>[2, 6],
+      translation: '电脑',
+      syllableBreakpoints: <int>[2, 5],
+    ),
+    PracticeQuestion(
+      word: 'running',
+      partOfSpeech: 'v.',
+      translation: '跑步',
+      syllableBreakpoints: <int>[2],
+    ),
+    PracticeQuestion(
+      word: 'elephant',
+      partOfSpeech: 'n.',
+      translation: '大象',
+      syllableBreakpoints: <int>[2, 4],
     ),
   ];
 
@@ -123,13 +153,24 @@ class _PracticePageState extends State<PracticePage> {
     return tokens;
   }
 
+  // 为翻译阶段创建占位符字符串，每个token用一个字符表示
+  String _buildTranslationPlaceholder(List<String> tokens) {
+    if (tokens.isEmpty) return '';
+    // 使用不同的占位符来区分不同token
+    final List<String> placeholders = <String>[];
+    for (int i = 0; i < tokens.length; i++) {
+      placeholders.add('■'); // 使用方块作为占位符
+    }
+    return placeholders.join();
+  }
+
   void _initializeTranslationStage() {
     _translationTokens
       ..clear()
       // 先添加词性（如果存在）
       ..addAll(
         current.partOfSpeech != null && current.partOfSpeech!.isNotEmpty
-            ? _splitTranslationTokens(current.partOfSpeech!)
+            ? <String>[current.partOfSpeech!]
             : <String>[],
       )
       // 然后添加翻译
@@ -419,11 +460,14 @@ class _PracticePageState extends State<PracticePage> {
     final String? headerText = (isTranslationStage || isCompletedStage)
         ? current.word
         : null;
-    final String displayWord =
+    final bool useTranslationTokens =
         (isTranslationStage || isCompletedStage) &&
-            _translationTokens.isNotEmpty
-        ? _translationTokens.join()
+        _translationTokens.isNotEmpty;
+    final String displayWord = useTranslationTokens
+        ? _buildTranslationPlaceholder(_translationTokens)
         : current.word;
+    final List<String>? expectedLetters =
+        (isTranslationStage || isCompletedStage) ? _translationTokens : null;
 
     Widget buildContent() {
       return Container(
@@ -443,16 +487,8 @@ class _PracticePageState extends State<PracticePage> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: <Widget>[
             if (headerText != null) ...<Widget>[
-              Text(
-                headerText,
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.black87,
-                ),
-              ),
-              const SizedBox(height: 12),
+              _buildSyllableGroupedWord(headerText),
+              const SizedBox(height: 16),
             ],
             Expanded(
               child: _MaskedWord(
@@ -474,6 +510,8 @@ class _PracticePageState extends State<PracticePage> {
                 tempWrongIndices: (isTranslationStage || isCompletedStage)
                     ? null
                     : _tempWrongSlots,
+                expectedLetters: expectedLetters,
+                isTranslationStage: isTranslationStage,
               ),
             ),
             const SizedBox(height: 16),
@@ -496,7 +534,7 @@ class _PracticePageState extends State<PracticePage> {
                     child: Text(
                       _buildPosAndTranslation(),
                       style: TextStyle(
-                        fontSize: 18,
+                        fontSize: 16, // 稍微调小中文释义字体，与单词形成对比
                         fontWeight: FontWeight.w500,
                         color: Colors.blue.shade700,
                       ),
@@ -681,6 +719,45 @@ class _PracticePageState extends State<PracticePage> {
               snapProgress: _snapProgress,
             );
           },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSyllableGroupedWord(String word) {
+    final List<int> breakpoints = current.syllableBreakpoints ?? <int>[];
+
+    if (breakpoints.isEmpty) {
+      return Text(
+        word,
+        textAlign: TextAlign.center,
+        style: const TextStyle(
+          fontSize: 27, // 增大50%: 18 * 1.5 = 27
+          fontWeight: FontWeight.w600,
+          color: Colors.green, // 改为绿色
+          letterSpacing: 2,
+        ),
+      );
+    }
+
+    // 按照单词拼写阶段的逻辑，在指定位置插入"-"
+    String result = '';
+    for (int i = 0; i < word.length; i++) {
+      result += word[i];
+      if (breakpoints.contains(i)) {
+        result += '-';
+      }
+    }
+
+    return Center(
+      child: Text(
+        result,
+        textAlign: TextAlign.center,
+        style: const TextStyle(
+          fontSize: 27, // 增大50%: 18 * 1.5 = 27
+          fontWeight: FontWeight.w600,
+          color: Colors.green, // 改为绿色
+          letterSpacing: 1,
         ),
       ),
     );
@@ -1061,6 +1138,8 @@ class _MaskedWord extends StatelessWidget {
     required this.snapProgress,
     this.nextBlankKey,
     this.tempWrongIndices,
+    this.expectedLetters,
+    this.isTranslationStage = false,
   });
 
   final String word;
@@ -1075,29 +1154,34 @@ class _MaskedWord extends StatelessWidget {
   final List<int>? syllableBreakpoints;
   final Key? nextBlankKey;
   final Set<int>? tempWrongIndices;
+  final List<String>? expectedLetters;
+  final bool isTranslationStage;
 
   @override
   Widget build(BuildContext context) {
     // Dynamic base font size by word length (optimized for better visibility)
     final int wordLen = word.length;
     double baseFontSize;
-    if (wordLen <= 4) {
-      baseFontSize = 72; // Reduced from 98 to prevent overlap
+    if (isTranslationStage) {
+      // 翻译阶段使用更大的字体，确保中文字符完整显示
+      baseFontSize = 70; // 进一步增大
+    } else if (wordLen <= 4) {
+      baseFontSize = 52; // 进一步增大单词字体
     } else if (wordLen <= 6) {
-      baseFontSize = 68; // Reduced from 84
+      baseFontSize = 58; // 进一步增大单词字体
     } else if (wordLen <= 8) {
-      baseFontSize = 64; // Reduced from 80
+      baseFontSize = 54; // 进一步增大单词字体
     } else if (wordLen <= 10) {
-      baseFontSize = 60; // Reduced from 76
+      baseFontSize = 50; // 进一步增大单词字体
     } else {
-      baseFontSize = 56; // Reduced from 72
+      baseFontSize = 56; // 进一步增大单词字体
     }
 
     final TextStyle visibleStyle = TextStyle(
       fontSize: baseFontSize,
       fontWeight: FontWeight.w800,
       color: Colors.black87,
-      letterSpacing: 1,
+      letterSpacing: isTranslationStage ? 0.0 : 0.1, // 中文不需要字母间距，英文间距进一步缩小
       height: 1.0,
     );
 
@@ -1127,23 +1211,37 @@ class _MaskedWord extends StatelessWidget {
       final bool isHidden = hiddenIndices.contains(i);
       if (isHidden) {
         final int blankOrder = fillCursor;
+        final String expectedValue =
+            (expectedLetters != null && blankOrder < expectedLetters!.length)
+            ? expectedLetters![blankOrder]
+            : word[i];
         final String? letter = (fillCursor < filledLetters.length)
             ? filledLetters[fillCursor]
             : null;
         fillCursor += 1;
         final bool isNextBlank =
             letter == null && blankOrder == filledLetters.length && !dropLocked;
+        final bool matchesExpected =
+            letter != null &&
+            (expectedLetters != null
+                ? letter == expectedValue
+                : letter.toLowerCase() == expectedValue.toLowerCase());
+        // 使用固定的宽度保持一致性
+        final double cellWidth = 80.0; // 固定的中等宽度
+
         final Widget blankCell = _AnimatedBlankCell(
           key: isNextBlank && nextBlankKey != null ? nextBlankKey : null,
           letter: letter,
           state: state,
           delay: fillCursor * 100, // 错开动画时间
           onLetterDropped: onLetterDropped,
-          expectedLetter: word[i],
+          expectedLetter: expectedValue,
           isNextBlank: isNextBlank,
           dropLocked: dropLocked,
           showError: tempWrongIndices?.contains(blankOrder) ?? false,
           baseFontSize: baseFontSize,
+          width: cellWidth,
+          isTranslationStage: isTranslationStage,
         );
 
         // 为下一个空格添加拖拽目标
@@ -1163,14 +1261,13 @@ class _MaskedWord extends StatelessWidget {
         }
 
         // 如果当前字母已填且与正确字母相同，且下一个位置是音节边界，则添加分隔符
-        if (letter != null &&
-            letter.toLowerCase() == word[i].toLowerCase() &&
+        if (matchesExpected &&
             blankOrder < userFilledCount &&
             syllableBreakpoints != null &&
             syllableBreakpoints!.contains(i)) {
           children.add(
             Text(
-              ' ',
+              ' -',
               style: visibleStyle.copyWith(color: Colors.grey.shade400),
               textHeightBehavior: const TextHeightBehavior(
                 applyHeightToFirstAscent: false,
@@ -1225,11 +1322,9 @@ class _MaskedWord extends StatelessWidget {
       if (i != word.length - 1) children.add(const SizedBox(width: 4));
     }
 
-    return SizedBox(
-      width: double.infinity,
+    return Center(
       child: FittedBox(
         fit: BoxFit.scaleDown,
-        alignment: Alignment.center,
         child: Row(
           mainAxisSize: MainAxisSize.min,
           textBaseline: TextBaseline.alphabetic,
@@ -1311,6 +1406,8 @@ class _AnimatedBlankCell extends StatefulWidget {
     required this.dropLocked,
     this.showError = false,
     required this.baseFontSize,
+    this.width,
+    this.isTranslationStage = false,
   });
 
   final String? letter;
@@ -1322,6 +1419,8 @@ class _AnimatedBlankCell extends StatefulWidget {
   final bool dropLocked;
   final bool showError;
   final double baseFontSize;
+  final double? width;
+  final bool isTranslationStage;
 
   @override
   State<_AnimatedBlankCell> createState() => _AnimatedBlankCellState();
@@ -1544,6 +1643,7 @@ class _AnimatedBlankCellState extends State<_AnimatedBlankCell>
               isCorrectLetter: isCorrectLetter,
               letter: widget.letter!,
               isFinalized: true,
+              isTranslationStage: widget.isTranslationStage,
             ),
           );
         }
@@ -1567,10 +1667,13 @@ class _AnimatedBlankCellState extends State<_AnimatedBlankCell>
         final double letterOffset =
             ((uniformHeight - widget.baseFontSize) * factor).clamp(6.0, 36.0);
 
+        // 使用固定的宽度保持一致性
+        final double cellWidth = widget.width ?? 80.0;
+
         return Transform.scale(
           scale: shouldAnimate ? _bounceAnimation.value : 1.0,
           child: Container(
-            width: 50,
+            width: cellWidth,
             height: uniformHeight,
             alignment: Alignment.bottomCenter,
             decoration: BoxDecoration(
@@ -1600,6 +1703,7 @@ class _AnimatedBlankCellState extends State<_AnimatedBlankCell>
                         isCorrectLetter: isCorrectLetter,
                         letter: widget.letter!,
                         isFinalized: false,
+                        isTranslationStage: widget.isTranslationStage,
                       ),
               ),
             ),
@@ -1614,12 +1718,19 @@ class _AnimatedBlankCellState extends State<_AnimatedBlankCell>
     required bool isCorrectLetter,
     required String letter,
     required bool isFinalized,
+    required bool isTranslationStage,
   }) {
     final double fontSize = isFinalized
-        ? widget.baseFontSize
+        ? (isTranslationStage
+              ? widget.baseFontSize *
+                    1.1 // 翻译阶段成功字体增大
+              : widget.baseFontSize * 1.2) // 非翻译阶段成功字体增大
         : (isWrongLetter
               ? (widget.baseFontSize - 10).clamp(24.0, 200.0)
-              : (widget.baseFontSize + 6));
+              : (isTranslationStage
+                    ? widget.baseFontSize *
+                          0.8 // 翻译阶段拖拽字体也调小
+                    : (widget.baseFontSize + 12))); // 增大增量，与更大的基础字体匹配
 
     final Color textColor = (isCorrectLetter
         ? Colors.green.shade600
@@ -1633,7 +1744,7 @@ class _AnimatedBlankCellState extends State<_AnimatedBlankCell>
         fontSize: fontSize,
         fontWeight: FontWeight.w800,
         color: textColor,
-        letterSpacing: 1,
+        letterSpacing: 0.1, // 进一步缩小字母间距，成功状态更紧凑
         height: 1.0,
       ),
       textHeightBehavior: const TextHeightBehavior(
