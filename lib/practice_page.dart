@@ -8,7 +8,7 @@ class Meaning {
   Meaning({required this.partOfSpeech, required this.translation});
 
   final String partOfSpeech; // 词性，如 'n.', 'v.', 'adj.'
-  final String translation; // 中文释义，如 '字典'
+  final List<String> translation; // 中文释义数组，每个元素是一个可拖拽的选项
 }
 
 class PracticeQuestion {
@@ -37,7 +37,9 @@ class PracticeQuestion {
   String? get partOfSpeech =>
       meanings.isNotEmpty ? meanings.first.partOfSpeech : null;
   String get translation =>
-      meanings.isNotEmpty ? meanings.first.translation : '';
+      meanings.isNotEmpty && meanings.first.translation.isNotEmpty
+      ? meanings.first.translation.first
+      : '';
 
   List<String> get answerLetters {
     return hiddenIndices.map((int i) => word[i]).toList(growable: false);
@@ -100,40 +102,51 @@ class _PracticePageState extends State<PracticePage> {
     PracticeQuestion(
       word: 'dict',
       meanings: <Meaning>[
-        Meaning(partOfSpeech: 'n.', translation: '字典'),
-        Meaning(partOfSpeech: 'n.', translation: '词典'),
-        Meaning(partOfSpeech: 'n.', translation: '辞典'),
+        Meaning(partOfSpeech: 'n.', translation: <String>['字典', '词典', '辞典']),
+        Meaning(partOfSpeech: 'v.', translation: <String>['字典1', '词典2', '辞典3']),
       ],
       syllableBreakpoints: <int>[2],
     ),
     PracticeQuestion(
       word: 'apple',
-      meanings: <Meaning>[Meaning(partOfSpeech: 'n.', translation: '苹果')],
+      meanings: <Meaning>[
+        Meaning(partOfSpeech: 'n.', translation: <String>['苹果']),
+      ],
       syllableBreakpoints: <int>[2],
     ),
     PracticeQuestion(
       word: 'soup',
-      meanings: <Meaning>[Meaning(partOfSpeech: 'n.', translation: '汤')],
+      meanings: <Meaning>[
+        Meaning(partOfSpeech: 'n.', translation: <String>['汤']),
+      ],
       syllableBreakpoints: <int>[2],
     ),
     PracticeQuestion(
       word: 'beautiful',
-      meanings: <Meaning>[Meaning(partOfSpeech: 'adj.', translation: '美丽的')],
+      meanings: <Meaning>[
+        Meaning(partOfSpeech: 'adj.', translation: <String>['美丽的']),
+      ],
       syllableBreakpoints: <int>[3, 6],
     ),
     PracticeQuestion(
       word: 'computer',
-      meanings: <Meaning>[Meaning(partOfSpeech: 'n.', translation: '电脑')],
+      meanings: <Meaning>[
+        Meaning(partOfSpeech: 'n.', translation: <String>['电脑']),
+      ],
       syllableBreakpoints: <int>[2, 5],
     ),
     PracticeQuestion(
       word: 'running',
-      meanings: <Meaning>[Meaning(partOfSpeech: 'v.', translation: '跑步')],
+      meanings: <Meaning>[
+        Meaning(partOfSpeech: 'v.', translation: <String>['跑步']),
+      ],
       syllableBreakpoints: <int>[2],
     ),
     PracticeQuestion(
       word: 'elephant',
-      meanings: <Meaning>[Meaning(partOfSpeech: 'n.', translation: '大象')],
+      meanings: <Meaning>[
+        Meaning(partOfSpeech: 'n.', translation: <String>['大象']),
+      ],
       syllableBreakpoints: <int>[2, 4],
     ),
   ];
@@ -143,6 +156,7 @@ class _PracticePageState extends State<PracticePage> {
   final List<int> usedOptionIndices = <int>[]; // 已使用的候选下标（用于禁用按钮）
   _AnswerState answerState = _AnswerState.none;
   List<String> activeOptions = <String>[]; // 当前阶段的候选选项
+  List<int> activeOptionIndices = <int>[]; // 候选选项对应原始答案列表的索引
   final Random _rnd = Random();
   bool isDropLocked = false; // 防止错误动画期间继续拖拽
   _PracticeStage _stage = _PracticeStage.spelling;
@@ -152,9 +166,9 @@ class _PracticePageState extends State<PracticePage> {
   _PracticeStage? _lastOptionsStage;
   bool _isInitialized = false; // 添加初始化标志
   int _currentMeaningIndex = 0; // 当前正在练习的含义索引（如果有多个含义，分成多次练习）
-  bool _shouldShowInstruction = true; // 控制是否显示拖拽instruction
   final List<Meaning> _completedMeanings = <Meaning>[]; // 已完成的词意组列表
   bool _isWaitingBetweenMeanings = false; // 是否正在等待期间（完成一组后等待3秒）
+  bool _showConfirmButtons = false; // 在拼写成功后显示确认按钮
 
   // 为翻译阶段创建占位符字符串，每个意思组用一个占位符表示
   String _buildTranslationPlaceholder(List<String> tokens) {
@@ -169,14 +183,13 @@ class _PracticePageState extends State<PracticePage> {
 
   void _initializeTranslationStage() {
     _translationTokens.clear();
-    // 每次只练习一组：一个词性和对应的翻译（翻译拆分成多个字符）
+    // 每次只练习一组：一个词性和对应的翻译选项
     if (_currentMeaningIndex < current.meanings.length) {
       final Meaning meaning = current.meanings[_currentMeaningIndex];
       // 词性作为一个单独的项
       _translationTokens.add(meaning.partOfSpeech);
-      // 将中文翻译拆分成单个字符项
-      final List<String> translationChars = meaning.translation.split('');
-      _translationTokens.addAll(translationChars);
+      // 将所有翻译选项作为可拖拽项
+      _translationTokens.addAll(meaning.translation);
     }
     _selectedMeaningTokens.clear();
     _translationUsedOptionIndices.clear();
@@ -187,9 +200,8 @@ class _PracticePageState extends State<PracticePage> {
       ? selectedLetters
       : _selectedMeaningTokens;
 
-  List<int> get _currentUsedIndices => _stage == _PracticeStage.spelling
-      ? usedOptionIndices
-      : _translationUsedOptionIndices;
+  List<int> get _currentUsedIndices =>
+      _stage == _PracticeStage.spelling ? usedOptionIndices : const <int>[];
 
   List<String> get _currentExpectedItems => _stage == _PracticeStage.spelling
       ? current.answerLetters
@@ -282,14 +294,29 @@ class _PracticePageState extends State<PracticePage> {
       }
     }
 
-    // 对于翻译阶段，始终显示当前组的所有选项（partOfSpeech + 拆分后的中文字符）
+    // 对于翻译阶段，只显示尚未使用的选项（词性 + 翻译项）
     // 对于拼写阶段，只显示剩余的答案
-    final List<String> remainingAnswers = _stage == _PracticeStage.translation
-        ? List<String>.from(answersList) // 翻译阶段：显示完整的所有选项（词性 + 中文字符项）
-        : answersList.sublist(filledCount); // 拼写阶段：只显示剩余的
+    final List<String> remainingAnswers;
+    final List<int> remainingIndices;
+    if (_stage == _PracticeStage.translation) {
+      remainingAnswers = <String>[];
+      remainingIndices = <int>[];
+      for (int i = 0; i < answersList.length; i += 1) {
+        if (_translationUsedOptionIndices.contains(i)) continue;
+        remainingAnswers.add(answersList[i]);
+        remainingIndices.add(i);
+      }
+    } else {
+      remainingAnswers = answersList.sublist(filledCount);
+      remainingIndices = List<int>.generate(
+        remainingAnswers.length,
+        (int index) => filledCount + index,
+      );
+    }
 
     setState(() {
       activeOptions = remainingAnswers;
+      activeOptionIndices = remainingIndices;
       if (_stage == _PracticeStage.spelling) {
         usedOptionIndices.clear();
       }
@@ -402,7 +429,7 @@ class _PracticePageState extends State<PracticePage> {
                                 : MediaQuery.of(context).size.height;
                             const double bottomSpacing = 12;
                             // 答案区固定高度
-                            const double answerHeight = 220.0;
+                            const double answerHeight = 320.0;
 
                             final Widget content = Padding(
                               padding: const EdgeInsets.symmetric(
@@ -410,6 +437,7 @@ class _PracticePageState extends State<PracticePage> {
                               ),
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.stretch,
+                                mainAxisAlignment: MainAxisAlignment.center,
                                 children: <Widget>[
                                   SizedBox(
                                     height: answerHeight,
@@ -456,24 +484,63 @@ class _PracticePageState extends State<PracticePage> {
 
     final List<String> maskedFilledLetters = isCompletedStage
         ? List<String>.from(_translationTokens)
-        : stageFilledLetters;
+        : (_selectedMeaningTokens.length == _translationTokens.length &&
+                  isTranslationStage
+              ? <String>[] // 词义拖拽成功后，下划线区域也不显示文本
+              : stageFilledLetters);
 
     final int totalSlots = stageHiddenIndices.length;
 
-    // 在拼写阶段完全隐藏翻译相关的UI
-    final bool showInstruction =
-        isTranslationStage && !isCompletedStage && _shouldShowInstruction;
-    final String? headerText = (isTranslationStage || isCompletedStage)
-        ? current.word
+    // 计算已完成的翻译列表（包含 _completedMeanings）
+    final List<String> completedTranslations = <String>[];
+    for (final Meaning meaning in _completedMeanings) {
+      completedTranslations.add(
+        '${meaning.partOfSpeech} ${meaning.translation.join(', ')}',
+      );
+    }
+
+    // 如果当前组也已完成，临时加入当前组的翻译用于下方展示
+    final bool currentGroupCompleted =
+        isTranslationStage &&
+        _translationTokens.isNotEmpty &&
+        _selectedMeaningTokens.length == _translationTokens.length &&
+        _currentMeaningIndex < current.meanings.length;
+    if (currentGroupCompleted) {
+      final Meaning meaning = current.meanings[_currentMeaningIndex];
+      completedTranslations.add(
+        '${meaning.partOfSpeech} ${meaning.translation.join(', ')}',
+      );
+    }
+
+    // 下方展示只用 completedTranslations，顶部单词直接使用 current.word
+    final bool hasCompletedTranslations = completedTranslations.isNotEmpty;
+    // completedTranslationsString removed; using completedTranslations list directly
+    // 选择用于显示翻译时的颜色：优先使用最后一次拖拽使用的选项颜色
+    final int? lastUsedOriginalIndex = _translationUsedOptionIndices.isNotEmpty
+        ? _translationUsedOptionIndices.last
         : null;
+    final Color completedDisplayColor =
+        (lastUsedOriginalIndex != null &&
+            lastUsedOriginalIndex >= 0 &&
+            lastUsedOriginalIndex < _optionColorsFull.length)
+        ? _optionColorsFull[lastUsedOriginalIndex]
+        : (_optionColorsFull.isNotEmpty
+              ? _optionColorsFull[0]
+              : Colors.black87);
     final bool useTranslationTokens =
         (isTranslationStage || isCompletedStage) &&
         _translationTokens.isNotEmpty;
     final String displayWord = useTranslationTokens
-        ? _buildTranslationPlaceholder(_translationTokens)
+        ? (_selectedMeaningTokens.length == _translationTokens.length
+              ? '' // 完成时不显示文本，只保留下划线区域
+              : _buildTranslationPlaceholder(_translationTokens))
         : current.word;
     final List<String>? expectedLetters =
-        (isTranslationStage || isCompletedStage) ? _translationTokens : null;
+        (isTranslationStage || isCompletedStage)
+        ? (_selectedMeaningTokens.length == _translationTokens.length
+              ? null // 拖拽成功后不再显示expectedLetters
+              : _translationTokens)
+        : null;
 
     Widget buildContent() {
       return Container(
@@ -524,58 +591,6 @@ class _PracticePageState extends State<PracticePage> {
                         expectedLetters: expectedLetters,
                         isTranslationStage: isTranslationStage,
                       ),
-                      const SizedBox(height: 16),
-                      // 显示已完成的词意组
-                      if (_completedMeanings.isNotEmpty &&
-                          (isTranslationStage || isCompletedStage)) ...<Widget>[
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 16,
-                            vertical: 12,
-                          ),
-                          decoration: const BoxDecoration(
-                            color: Colors.transparent,
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: <Widget>[
-                              Text(
-                                '已完成的词意：',
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w500,
-                                  color: Colors.green.shade700,
-                                ),
-                              ),
-                              const SizedBox(height: 8),
-                              Wrap(
-                                spacing: 16,
-                                runSpacing: 4,
-                                children: _completedMeanings.map((
-                                  Meaning meaning,
-                                ) {
-                                  return Text(
-                                    '${meaning.partOfSpeech} ${meaning.translation}',
-                                    style: TextStyle(
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.w600,
-                                      color: Colors.green.shade800,
-                                    ),
-                                  );
-                                }).toList(),
-                              ),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-                      ],
-                      if (showInstruction) ...<Widget>[
-                        const Text(
-                          '请拖拽词性和中文释义形成词义组',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(fontSize: 14, color: Colors.black54),
-                        ),
-                      ],
                       if (!isTranslationStage &&
                           !isCompletedStage &&
                           current.syllableBreakpoints != null &&
@@ -593,17 +608,120 @@ class _PracticePageState extends State<PracticePage> {
                             textAlign: TextAlign.center,
                           ),
                         ),
+                      // 成功后在答案区下方显示词义信息：
+                      // - 如果刚完成当前组（currentGroupCompleted），优先显示该组的中文释义（居中放大）
+                      // - 否则显示已有的已完成翻译汇总（较小字号）
+                      if (currentGroupCompleted)
+                        Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          child: SizedBox(
+                            height: 88,
+                            child: Center(
+                              child: Text(
+                                current
+                                    .meanings[_currentMeaningIndex]
+                                    .translation
+                                    .join('、'),
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  fontSize: 32,
+                                  fontWeight: FontWeight.w800,
+                                  color: completedDisplayColor,
+                                ),
+                              ),
+                            ),
+                          ),
+                        )
+                      else if (hasCompletedTranslations)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 12),
+                          child: Center(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: completedTranslations
+                                  .map(
+                                    (String t) => Text(
+                                      t,
+                                      textAlign: TextAlign.center,
+                                      style: TextStyle(
+                                        fontSize: 18,
+                                        fontWeight: FontWeight.w600,
+                                        color: completedDisplayColor,
+                                      ),
+                                    ),
+                                  )
+                                  .toList(growable: false),
+                            ),
+                          ),
+                        ),
+                      // 如果拼写成功且等待用户确认，显示两个调皮按钮
+                      if (_showConfirmButtons &&
+                          _stage == _PracticeStage.spelling)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 14),
+                          child: Center(
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: <Widget>[
+                                ElevatedButton(
+                                  onPressed: _onKnowPressed,
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: Colors.green.shade600,
+                                    foregroundColor: Colors.white,
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(20),
+                                    ),
+                                  ),
+                                  child: const Padding(
+                                    padding: EdgeInsets.symmetric(
+                                      horizontal: 14,
+                                      vertical: 10,
+                                    ),
+                                    child: Text(
+                                      '我知道啦 👍',
+                                      style: TextStyle(fontSize: 16),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                OutlinedButton(
+                                  onPressed: _onReviewPressed,
+                                  style: OutlinedButton.styleFrom(
+                                    foregroundColor: Colors.orange.shade700,
+                                    side: BorderSide(
+                                      color: Colors.orange.shade300,
+                                    ),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(20),
+                                    ),
+                                  ),
+                                  child: const Padding(
+                                    padding: EdgeInsets.symmetric(
+                                      horizontal: 14,
+                                      vertical: 10,
+                                    ),
+                                    child: Text(
+                                      '再看看 😜',
+                                      style: TextStyle(fontSize: 16),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
                     ],
                   ),
                 ),
-                if (headerText != null)
+                // 左上角单词仅在翻译阶段显示，拼写阶段隐藏
+                if (isTranslationStage)
                   Positioned(
                     top: 1,
-                    left: 1,
+                    left: 0,
                     child: Transform.scale(
                       scale: 0.6,
                       alignment: Alignment.topLeft,
-                      child: _buildSyllableGroupedWord(headerText),
+                      child: _buildSyllableGroupedWord(current.word),
                     ),
                   ),
               ],
@@ -807,11 +925,13 @@ class _PracticePageState extends State<PracticePage> {
       Future<void>.delayed(Duration(milliseconds: isRight ? 500 : 900), () {
         if (!mounted) return;
         if (isRight) {
+          // 显示成功，并弹出确认按钮，等待用户选择是否知道词义
           setState(() {
             answerState = _AnswerState.success;
             _resetScrollFlag(); // 成功时重置滚动标志
+            _showConfirmButtons = true;
           });
-          _transitionAfterWordSolved();
+          // 不自动切换，等待用户操作：知道 -> 跳到下一个单词；再看看 -> 进入翻译练习
         } else {
           _cancelAutoAdvance();
           setState(() {
@@ -827,11 +947,29 @@ class _PracticePageState extends State<PracticePage> {
     }
   }
 
+  void _onKnowPressed() {
+    // 用户确认知道词义：隐藏按钮并直接进入下一个单词
+    if (!mounted) return;
+    setState(() {
+      _showConfirmButtons = false;
+    });
+    // 直接跳到下一题
+    _next();
+  }
+
+  void _onReviewPressed() {
+    // 用户选择再看看：进入翻译练习
+    if (!mounted) return;
+    setState(() {
+      _showConfirmButtons = false;
+    });
+    _transitionAfterWordSolved();
+  }
+
   void _transitionAfterWordSolved() {
     _cancelAutoAdvance();
     // 重置含义索引，从第一个含义开始
     _currentMeaningIndex = 0;
-    _shouldShowInstruction = true;
     _completedMeanings.clear(); // 清空已完成的词意组列表
     _isWaitingBetweenMeanings = false; // 重置等待标志
     _initializeTranslationStage();
@@ -839,6 +977,7 @@ class _PracticePageState extends State<PracticePage> {
       setState(() {
         _stage = _PracticeStage.completed;
         activeOptions = <String>[];
+        activeOptionIndices = <int>[];
         answerState = _AnswerState.success;
         isDropLocked = false;
       });
@@ -852,7 +991,8 @@ class _PracticePageState extends State<PracticePage> {
       _lastOptionsStage = null;
       answerState = _AnswerState.none;
       isDropLocked = false;
-      _shouldShowInstruction = true; // 开始新组时显示instruction
+      activeOptionIndices = <int>[];
+      // 开始新组时显示instruction
     });
     _prepareOptions();
   }
@@ -866,9 +1006,14 @@ class _PracticePageState extends State<PracticePage> {
     if (token != expected) return;
 
     _cancelAutoAdvance();
+    final int originalIndex =
+        (optionIndex >= 0 && optionIndex < activeOptionIndices.length)
+        ? activeOptionIndices[optionIndex]
+        : optionIndex;
+
     setState(() {
       _selectedMeaningTokens.add(token);
-      _translationUsedOptionIndices.add(optionIndex);
+      _translationUsedOptionIndices.add(originalIndex);
     });
 
     _prepareOptions();
@@ -919,7 +1064,8 @@ class _PracticePageState extends State<PracticePage> {
           answerState = _AnswerState.none;
           isDropLocked = false;
           _isWaitingBetweenMeanings = false;
-          _shouldShowInstruction = true; // 切换到下一组时显示instruction
+          activeOptionIndices = <int>[];
+          // 切换到下一组时显示instruction
         });
         _prepareOptions(); // 更新选项区，显示下一组的选项
       });
@@ -930,6 +1076,7 @@ class _PracticePageState extends State<PracticePage> {
     setState(() {
       _stage = _PracticeStage.completed;
       activeOptions = <String>[];
+      activeOptionIndices = <int>[];
       answerState = _AnswerState.success;
       _isWaitingBetweenMeanings = false;
     });
@@ -1102,6 +1249,7 @@ class _PracticePageState extends State<PracticePage> {
         currentIndex += 1;
         selectedLetters.clear();
         usedOptionIndices.clear();
+        activeOptionIndices.clear();
         answerState = _AnswerState.none;
         isDropLocked = false; // 重置拖拽锁定状态，确保下一个单词可以拖拽
         _isSnapping.value = false; // 重置吸附动画状态
@@ -1112,7 +1260,6 @@ class _PracticePageState extends State<PracticePage> {
         _optionRowTopPadding = 12.0;
         _stage = _PracticeStage.spelling;
         _currentMeaningIndex = 0; // 重置含义索引，从第一个含义开始
-        _shouldShowInstruction = true;
         _completedMeanings.clear(); // 清空已完成的词意组列表
         _isWaitingBetweenMeanings = false; // 重置等待标志
         _initializeTranslationStage();
@@ -1295,7 +1442,7 @@ class _MaskedWord extends StatelessWidget {
             : 80.0; // 固定的中等宽度
 
         final Widget blankCell = _AnimatedBlankCell(
-          key: isNextBlank && nextBlankKey != null ? nextBlankKey : null,
+          key: ValueKey<String>('blank_${i}_${letter ?? "empty"}_${state}'),
           letter: letter,
           state: state,
           delay: fillCursor * 100, // 错开动画时间
@@ -1753,69 +1900,40 @@ class _AnimatedBlankCellState extends State<_AnimatedBlankCell>
             alignment: Alignment.center,
             decoration: const BoxDecoration(color: Colors.transparent),
             child: widget.isTranslationStage
-                ? Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: <Widget>[
-                      // 上半部分：下划线
-                      Container(
-                        height: uniformHeight / 2,
+                ? Container(
+                    alignment: Alignment.bottomCenter,
+                    decoration: BoxDecoration(
+                      color: Colors.transparent,
+                      border: (isEmpty || isWrongLetter)
+                          ? Border(
+                              bottom: BorderSide(
+                                color: isEmpty
+                                    ? (widget.isNextBlank
+                                          ? baseBorderColor
+                                          : Colors.grey.shade300)
+                                    : baseBorderColor,
+                                width: isEmpty
+                                    ? (widget.isNextBlank ? 1.5 : 1.0)
+                                    : 1.5,
+                              ),
+                            )
+                          : null,
+                    ),
+                    child: Padding(
+                      padding: EdgeInsets.only(bottom: letterOffset),
+                      child: Align(
                         alignment: Alignment.bottomCenter,
-                        decoration: BoxDecoration(
-                          color: Colors.transparent,
-                          border: (isEmpty || isWrongLetter)
-                              ? Border(
-                                  bottom: BorderSide(
-                                    color: isEmpty
-                                        ? (widget.isNextBlank
-                                              ? baseBorderColor
-                                              : Colors.grey.shade300)
-                                        : baseBorderColor,
-                                    width: isEmpty
-                                        ? (widget.isNextBlank ? 1.5 : 1.0)
-                                        : 1.5,
-                                  ),
-                                )
-                              : null,
-                        ),
-                        child: Padding(
-                          padding: EdgeInsets.only(bottom: letterOffset),
-                          child: Align(
-                            alignment: Alignment.bottomCenter,
-                            child: isEmpty
-                                ? const SizedBox.shrink()
-                                : _buildAnimatedLetter(
-                                    isWrongLetter: isWrongLetter,
-                                    isCorrectLetter: isCorrectLetter,
-                                    letter: widget.letter!,
-                                    isFinalized: false,
-                                    isTranslationStage:
-                                        widget.isTranslationStage,
-                                  ),
-                          ),
-                        ),
-                      ),
-                      // 下半部分：显示拖拽后的答案（如果有的话）
-                      Container(
-                        height: uniformHeight / 2,
-                        alignment: Alignment.topCenter,
-                        padding: const EdgeInsets.only(top: 4),
                         child: isEmpty
                             ? const SizedBox.shrink()
-                            : Text(
-                                widget.letter!.toLowerCase(),
-                                style: TextStyle(
-                                  fontSize: widget.baseFontSize * 0.6,
-                                  fontWeight: FontWeight.w600,
-                                  color: isCorrectLetter
-                                      ? Colors.green.shade600
-                                      : (isWrongLetter
-                                            ? Colors.red
-                                            : Colors.black87),
-                                ),
-                                textAlign: TextAlign.center,
+                            : _buildAnimatedLetter(
+                                isWrongLetter: isWrongLetter,
+                                isCorrectLetter: isCorrectLetter,
+                                letter: widget.letter!,
+                                isFinalized: false,
+                                isTranslationStage: widget.isTranslationStage,
                               ),
                       ),
-                    ],
+                    ),
                   )
                 : Container(
                     alignment: Alignment.bottomCenter,
@@ -1866,17 +1984,25 @@ class _AnimatedBlankCellState extends State<_AnimatedBlankCell>
     required bool isFinalized,
     required bool isTranslationStage,
   }) {
-    final double fontSize = isFinalized
-        ? (isTranslationStage
-              ? widget.baseFontSize *
-                    1.1 // 翻译阶段成功字体增大
-              : widget.baseFontSize * 1.2) // 非翻译阶段成功字体增大
-        : (isWrongLetter
-              ? (widget.baseFontSize - 10).clamp(24.0, 200.0)
-              : (isTranslationStage
-                    ? widget.baseFontSize *
-                          0.5 // 翻译阶段拖拽字体进一步调小
-                    : (widget.baseFontSize + 12))); // 增大增量，与更大的基础字体匹配
+    double fontSize;
+    if (isTranslationStage) {
+      final double availableWidth =
+          (widget.width ?? (widget.baseFontSize * 3.0)) * 0.92;
+      final int charCount = max(1, letter.runes.length);
+      final double baseSize = isFinalized
+          ? widget.baseFontSize * 1.05
+          : widget.baseFontSize * (isWrongLetter ? 0.7 : 1.4);
+      final double fitSize = availableWidth / (charCount * 1.2);
+      fontSize = min(baseSize, fitSize);
+      final double maxSize = isFinalized ? 48.0 : 42.0;
+      fontSize = fontSize.clamp(18.0, maxSize).toDouble();
+    } else {
+      fontSize = isFinalized
+          ? widget.baseFontSize * 1.2
+          : (isWrongLetter
+                ? (widget.baseFontSize - 10).clamp(24.0, 200.0)
+                : (widget.baseFontSize + 12));
+    }
 
     final Color textColor = (isCorrectLetter
         ? Colors.green.shade600
@@ -1893,6 +2019,7 @@ class _AnimatedBlankCellState extends State<_AnimatedBlankCell>
         letterSpacing: 0.1, // 进一步缩小字母间距，成功状态更紧凑
         height: 1.0,
       ),
+      textAlign: TextAlign.center,
       textHeightBehavior: const TextHeightBehavior(
         applyHeightToFirstAscent: false,
         applyHeightToLastDescent: false,
@@ -2492,10 +2619,24 @@ class _OptionsKeyboardState extends State<_OptionsKeyboard>
     final Color inactiveColor = Colors.grey.shade500;
     final double baseItemSize = _baseItemSizeForIndex(index);
 
-    // 检查是否为中文字符，使用更小的字体倍数
+    // 检查是否为中文字符，根据字符长度调整字体倍数
     final String optionText = widget.options[index];
     final bool isChinese = _isChineseText(optionText);
-    final double fontMultiplier = isChinese ? 0.35 : 0.45; // 中文使用更小的倍数
+    final int textLength = optionText.length;
+
+    // 根据字符长度动态调整字体倍数
+    double baseFontMultiplier = isChinese ? 0.35 : 0.45;
+    if (textLength <= 1) {
+      baseFontMultiplier = isChinese ? 0.45 : 0.55; // 单字可以使用更大的字体
+    } else if (textLength == 2) {
+      baseFontMultiplier = isChinese ? 0.40 : 0.50; // 两字适中
+    } else if (textLength == 3) {
+      baseFontMultiplier = isChinese ? 0.30 : 0.40; // 三字需要缩小
+    } else {
+      baseFontMultiplier = isChinese ? 0.25 : 0.35; // 四字及以上进一步缩小
+    }
+
+    final double fontMultiplier = baseFontMultiplier;
     final double textSize = (baseItemSize * fontMultiplier).clamp(16.0, 48.0);
 
     final Gradient gradient = isCorrect
@@ -2596,12 +2737,28 @@ class _OptionsKeyboardState extends State<_OptionsKeyboard>
     bool isCorrect,
   ) {
     final double displaySize = baseItemSize * visualScale;
-    final double feedbackSize = max(displaySize, 96.0);
+    // 增大拖拽 feedback 的最小尺寸，使拖拽时文字更大更显眼
+    final double feedbackSize = max(displaySize, 140.0);
 
-    // 检查是否为中文字符，使用更小的字体倍数
+    // 检查是否为中文字符，根据字符长度调整字体倍数
     final bool isChinese = _isChineseText(label);
-    final double fontMultiplier = isChinese ? 0.30 : 0.38; // 中文使用更小的倍数
-    final double fontSize = (displaySize * fontMultiplier).clamp(18.0, 54.0);
+    final int textLength = label.length;
+
+    // 根据字符长度动态调整字体倍数
+    double baseFontMultiplier = isChinese ? 0.30 : 0.38;
+    if (textLength <= 1) {
+      baseFontMultiplier = isChinese ? 0.38 : 0.46; // 单字可以使用更大的字体
+    } else if (textLength == 2) {
+      baseFontMultiplier = isChinese ? 0.34 : 0.42; // 两字适中
+    } else if (textLength == 3) {
+      baseFontMultiplier = isChinese ? 0.26 : 0.34; // 三字需要缩小
+    } else {
+      baseFontMultiplier = isChinese ? 0.22 : 0.30; // 四字及以上进一步缩小
+    }
+
+    // feedback 时适当放大字体倍数，且基于 feedbackSize 计算最终字体
+    final double fontMultiplier = baseFontMultiplier * 1.15;
+    final double fontSize = (feedbackSize * fontMultiplier).clamp(18.0, 64.0);
 
     return Material(
       type: MaterialType.transparency,
