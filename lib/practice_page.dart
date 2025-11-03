@@ -85,7 +85,8 @@ class _DragLetterPayload {
   final String letter;
 }
 
-class _PracticePageState extends State<PracticePage> {
+class _PracticePageState extends State<PracticePage>
+    with SingleTickerProviderStateMixin {
   static const List<Color> _optionColorPalette = <Color>[
     Color(0xFF4C6EF5),
     Color(0xFF4263EB),
@@ -124,7 +125,7 @@ class _PracticePageState extends State<PracticePage> {
     PracticeQuestion(
       word: 'beautiful',
       meanings: <Meaning>[
-        Meaning(partOfSpeech: 'adj.', translation: <String>['美丽的']),
+        Meaning(partOfSpeech: 'adj.', translation: <String>['美丽', '的']),
       ],
       syllableBreakpoints: <int>[3, 6],
     ),
@@ -168,7 +169,15 @@ class _PracticePageState extends State<PracticePage> {
   int _currentMeaningIndex = 0; // 当前正在练习的含义索引（如果有多个含义，分成多次练习）
   final List<Meaning> _completedMeanings = <Meaning>[]; // 已完成的词意组列表
   bool _isWaitingBetweenMeanings = false; // 是否正在等待期间（完成一组后等待3秒）
-  bool _showConfirmButtons = false; // 在拼写成功后显示确认按钮
+  bool _showColoredWordGroup = false; // 控制拼写完成后中间显示彩色单词
+  bool _showZipperOverlay = false; // 拼写完成后是否显示拉链特效
+  double _zipProgress = 0.0; // 拉链开启进度 0-1
+  bool _zipSkipArmed = false; // 是否触发上拉跳过下一词
+  double _zipDragOffset = 0.0; // 临时的手柄拖拽偏移（用于在 progress == 0 时上拉）
+  bool _zipShouldComplete = false; // 在拖拽过程中达到阈值，但等待手势结束再完成
+  double? _lastZipperHalfHeight;
+  AnimationController? _middleWordController;
+  Animation<Offset>? _middleWordOffset;
 
   // 为翻译阶段创建占位符字符串，每个意思组用一个占位符表示
   String _buildTranslationPlaceholder(List<String> tokens) {
@@ -226,6 +235,17 @@ class _PracticePageState extends State<PracticePage> {
   @override
   void initState() {
     super.initState();
+    _middleWordController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 360),
+    );
+    _middleWordOffset =
+        Tween<Offset>(begin: Offset.zero, end: const Offset(0, -0.35)).animate(
+          CurvedAnimation(
+            parent: _middleWordController!,
+            curve: Curves.easeInOut,
+          ),
+        );
     // 延迟初始化，确保在首帧渲染后再初始化
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
@@ -237,12 +257,24 @@ class _PracticePageState extends State<PracticePage> {
         _prepareOptions();
       }
     });
+
+    _middleWordController?.addStatusListener((AnimationStatus status) {
+      if (status == AnimationStatus.completed) {
+        if (mounted) {
+          setState(() {
+            _showColoredWordGroup = false;
+          });
+        }
+        _middleWordController?.reset();
+      }
+    });
   }
 
   @override
   void dispose() {
     _autoAdvanceTimer?.cancel();
     _scrollController.dispose();
+    _middleWordController?.dispose();
     super.dispose();
   }
 
@@ -428,27 +460,31 @@ class _PracticePageState extends State<PracticePage> {
                                 ? constraints.maxHeight
                                 : MediaQuery.of(context).size.height;
                             const double bottomSpacing = 12;
-                            // 答案区固定高度
-                            const double answerHeight = 320.0;
 
                             final Widget content = Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 16,
+                              padding: const EdgeInsets.fromLTRB(
+                                16,
+                                0,
+                                16,
+                                bottomSpacing,
                               ),
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.stretch,
                                 mainAxisAlignment: MainAxisAlignment.center,
                                 children: <Widget>[
-                                  SizedBox(
-                                    height: answerHeight,
+                                  // 将答案区与选项区平均分配高度
+                                  Expanded(
+                                    flex: 1,
                                     child: _buildAnswerSection(
                                       translationOpacity: translationOpacity,
                                       translationVisible: translationVisible,
                                     ),
                                   ),
                                   const SizedBox(height: 12),
-                                  Expanded(child: _buildOptionsSection()),
-                                  const SizedBox(height: bottomSpacing),
+                                  Expanded(
+                                    flex: 1,
+                                    child: _buildOptionsSection(),
+                                  ),
                                 ],
                               ),
                             );
@@ -618,6 +654,93 @@ class _PracticePageState extends State<PracticePage> {
                         // 成功后在答案区下方显示词义信息：
                         // - 如果刚完成当前组（currentGroupCompleted），优先显示该组的中文释义（居中放大）
                         // - 否则显示已有的已完成翻译汇总（较小字号）
+                        // 彩色单词展示：根据是否已有完成的词义动态分段
+                        if (_showColoredWordGroup)
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 8.0),
+                            child: Center(
+                              child: SlideTransition(
+                                position:
+                                    _middleWordOffset ??
+                                    AlwaysStoppedAnimation<Offset>(Offset.zero),
+                                child: Builder(
+                                  builder: (BuildContext context) {
+                                    final String cleanedWord = current.word
+                                        .replaceAll(RegExp(r'[-\s]'), '');
+                                    if (cleanedWord.isEmpty) {
+                                      return const SizedBox.shrink();
+                                    }
+
+                                    final bool useCompleted =
+                                        hasCompletedTranslations;
+                                    final int segmentCount = useCompleted
+                                        ? completedTranslations.length.clamp(
+                                            1,
+                                            cleanedWord.length,
+                                          )
+                                        : 1;
+                                    final int base =
+                                        (cleanedWord.length / segmentCount)
+                                            .floor();
+                                    final int remainder =
+                                        cleanedWord.length % segmentCount;
+                                    final List<Color> colors =
+                                        List<Color>.generate(
+                                          segmentCount,
+                                          (int i) =>
+                                              i < _optionColorsFull.length &&
+                                                  _optionColorsFull.isNotEmpty
+                                              ? _optionColorsFull[i]
+                                              : _optionColorPalette[i %
+                                                    _optionColorPalette.length],
+                                          growable: false,
+                                        );
+
+                                    final List<Widget> parts = <Widget>[];
+                                    if (segmentCount == 1) {
+                                      parts.add(
+                                        Text(
+                                          cleanedWord,
+                                          style: TextStyle(
+                                            fontSize: 22,
+                                            fontWeight: FontWeight.w700,
+                                            color: colors.first,
+                                            letterSpacing: 0.0,
+                                          ),
+                                        ),
+                                      );
+                                    } else {
+                                      int cursor = 0;
+                                      for (int i = 0; i < segmentCount; i++) {
+                                        final int len =
+                                            base + (i < remainder ? 1 : 0);
+                                        final String part = cleanedWord
+                                            .substring(cursor, cursor + len);
+                                        cursor += len;
+                                        parts.add(
+                                          Text(
+                                            part,
+                                            style: TextStyle(
+                                              fontSize: 22,
+                                              fontWeight: FontWeight.w700,
+                                              color: colors[i],
+                                              letterSpacing: 0.0,
+                                            ),
+                                          ),
+                                        );
+                                      }
+                                    }
+
+                                    return Wrap(
+                                      alignment: WrapAlignment.center,
+                                      spacing: 2,
+                                      children: parts,
+                                    );
+                                  },
+                                ),
+                              ),
+                            ),
+                          ),
                         if (currentGroupCompleted)
                           Padding(
                             padding: const EdgeInsets.symmetric(vertical: 12),
@@ -634,6 +757,7 @@ class _PracticePageState extends State<PracticePage> {
                                     fontSize: 32,
                                     fontWeight: FontWeight.w800,
                                     color: completedDisplayColor,
+                                    letterSpacing: 0.0,
                                   ),
                                 ),
                               ),
@@ -665,66 +789,11 @@ class _PracticePageState extends State<PracticePage> {
                                           fontSize: dynamicSize,
                                           fontWeight: FontWeight.w700,
                                           color: completedDisplayColor,
+                                          letterSpacing: 0.0,
                                         ),
                                       );
                                     })
                                     .toList(growable: false),
-                              ),
-                            ),
-                          ),
-                        // 如果拼写成功且等待用户确认，显示两个调皮按钮
-                        if (_showConfirmButtons &&
-                            _stage == _PracticeStage.spelling)
-                          Padding(
-                            padding: const EdgeInsets.only(top: 14),
-                            child: Center(
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: <Widget>[
-                                  ElevatedButton(
-                                    onPressed: _onKnowPressed,
-                                    style: ElevatedButton.styleFrom(
-                                      backgroundColor: Colors.green.shade600,
-                                      foregroundColor: Colors.white,
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(20),
-                                      ),
-                                    ),
-                                    child: const Padding(
-                                      padding: EdgeInsets.symmetric(
-                                        horizontal: 14,
-                                        vertical: 10,
-                                      ),
-                                      child: Text(
-                                        '我知道啦 👍',
-                                        style: TextStyle(fontSize: 16),
-                                      ),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 12),
-                                  OutlinedButton(
-                                    onPressed: _onReviewPressed,
-                                    style: OutlinedButton.styleFrom(
-                                      foregroundColor: Colors.orange.shade700,
-                                      side: BorderSide(
-                                        color: Colors.orange.shade300,
-                                      ),
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(20),
-                                      ),
-                                    ),
-                                    child: const Padding(
-                                      padding: EdgeInsets.symmetric(
-                                        horizontal: 14,
-                                        vertical: 10,
-                                      ),
-                                      child: Text(
-                                        '再看看 😜',
-                                        style: TextStyle(fontSize: 16),
-                                      ),
-                                    ),
-                                  ),
-                                ],
                               ),
                             ),
                           ),
@@ -803,7 +872,6 @@ class _PracticePageState extends State<PracticePage> {
       shadowColor: Colors.black.withOpacity(0.1),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
       child: Container(
-        padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(24),
@@ -861,22 +929,238 @@ class _PracticePageState extends State<PracticePage> {
                           .map((MapEntry<int, String> entry) => entry.key)
                           .firstOrNull ??
                       -1;
-            return _OptionsKeyboard(
-              options: activeOptions,
-              weights: optionWeights,
-              colors: optionColors,
-              topPadding: _optionRowTopPadding,
-              usedOptionIndices: _currentUsedIndices,
-              onTapLetter: _onTapLetter,
-              dragOnly: true,
-              canDrag: !isDropLocked && !_isWaitingBetweenMeanings,
-              correctIndex: correctIndex,
-              isSnapping: _isSnapping,
-              snapProgress: _snapProgress,
+            final bool showZipper =
+                _showZipperOverlay && _stage == _PracticeStage.spelling;
+
+            final Widget keyboard = Padding(
+              padding: const EdgeInsets.all(16),
+              child: _OptionsKeyboard(
+                options: activeOptions,
+                weights: optionWeights,
+                colors: optionColors,
+                topPadding: _optionRowTopPadding,
+                usedOptionIndices: _currentUsedIndices,
+                onTapLetter: _onTapLetter,
+                dragOnly: true,
+                canDrag: !isDropLocked && !_isWaitingBetweenMeanings,
+                correctIndex: correctIndex,
+                isSnapping: _isSnapping,
+                snapProgress: _snapProgress,
+              ),
+            );
+
+            return Stack(
+              children: <Widget>[
+                keyboard,
+                if (showZipper)
+                  Positioned.fill(
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(24),
+                      child: _buildZipperOverlay(),
+                    ),
+                  ),
+              ],
             );
           },
         ),
       ),
+    );
+  }
+
+  Widget _buildZipperOverlay() {
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints constraints) {
+        final double fullHeight = constraints.maxHeight.clamp(
+          1.0,
+          double.infinity,
+        );
+        final double halfHeight = fullHeight / 2;
+        _lastZipperHalfHeight = halfHeight;
+        final double progress = _zipProgress.clamp(0.0, 1.0);
+        // 如果当前 progress 为 0 且存在上拉偏移，使用临时进度以驱动面板联动
+        final bool isPullingUp = progress <= 0.001 && _zipDragOffset < 0;
+        final double signedProgress = isPullingUp
+            ? -(_zipDragOffset.abs() / halfHeight).clamp(0.0, 1.0)
+            : progress;
+        final double visualProgress = signedProgress.abs();
+        final double gap = fullHeight * visualProgress;
+        final double panelHeight = visualProgress < 0.1
+            ? fullHeight
+            : max(0.0, halfHeight - gap / 2); // 初始状态完全遮盖
+        final double handleTravel = halfHeight - 28.0;
+        final double handleOffset = (signedProgress * handleTravel).clamp(
+          -handleTravel,
+          handleTravel,
+        );
+
+        Widget buildPanel(bool isTop) {
+          return Container(
+            decoration: BoxDecoration(
+              color: const Color(0xFF12B886), // 首页绿色背景
+              borderRadius: isTop
+                  ? const BorderRadius.only(
+                      topLeft: Radius.circular(24),
+                      topRight: Radius.circular(24),
+                      // 底部直角，方便合并
+                    )
+                  : const BorderRadius.only(
+                      bottomLeft: Radius.circular(24),
+                      bottomRight: Radius.circular(24),
+                      // 顶部直角，方便合并
+                    ),
+              boxShadow: const <BoxShadow>[
+                BoxShadow(
+                  color: Colors.black12,
+                  blurRadius: 8,
+                  offset: Offset(0, 4),
+                ),
+              ],
+            ),
+          );
+        }
+
+        Widget buildTeeth() {
+          final double teethHeight = fullHeight * 0.55;
+          return SizedBox(height: teethHeight); // 删除拉链上的点
+        }
+
+        return GestureDetector(
+          behavior: HitTestBehavior.translucent,
+          onVerticalDragUpdate: (DragUpdateDetails details) {
+            if (!_showZipperOverlay) return;
+            final double delta = details.primaryDelta ?? 0.0;
+            if (halfHeight <= 0) return;
+            final double next = (_zipProgress + delta / (halfHeight * 1.1))
+                .clamp(0.0, 1.0);
+            if (next >= 0.95) {
+              // 达到下拉完成阈值：标记为应完成（但不立即完成，以免中断手势或引起重排）
+              setState(() {
+                _zipShouldComplete = true;
+              });
+              return;
+            } else {
+              // 如果向上拖拽且 next 接近或小于 0，切换到上拉模式
+              // 或者在 progress 已经在 0 时继续上拉，直接累积偏移让手柄跟手移动
+              if (delta < 0 && (next <= 0.001 || _zipProgress <= 0.001)) {
+                setState(() {
+                  // 如果正在从正常 progress 切换到上拉模式，需要计算初始偏移
+                  if (_zipProgress > 0.001) {
+                    // 将当前的 progress 转换为对应的 dragOffset，保持视觉连续性
+                    final double currentVisualOffset =
+                        _zipProgress * halfHeight * 1.1;
+                    _zipDragOffset = (-currentVisualOffset + delta).clamp(
+                      -halfHeight,
+                      0.0,
+                    );
+                    _zipProgress = 0.0;
+                  } else {
+                    // 已经在上拉模式，直接累积 delta
+                    _zipDragOffset = (_zipDragOffset + delta).clamp(
+                      -halfHeight,
+                      0.0,
+                    );
+                  }
+                  // 当偏移超过阈值时，标记为可跳过下一词
+                  _zipSkipArmed =
+                      _zipDragOffset <= -max(40.0, halfHeight * 0.25);
+                });
+
+                // 如果在上拉过程中已经拉到顶部阈值，将状态标记为应完成（但不立即完成，避免中断手势）
+                if (_zipDragOffset.abs() >= max(halfHeight * 0.9, 40.0)) {
+                  // 标记为应完成，但不要修改进度值或移除 overlay，避免中断手势
+                  setState(() {
+                    _zipShouldComplete = true;
+                  });
+                  return;
+                }
+              } else {
+                // 正常下拉或拖拽，更新 progress
+                setState(() {
+                  _zipProgress = next;
+                  // 只有在下拉时才重置 dragOffset，避免上拉时回退
+                  if (delta > 0) {
+                    _zipDragOffset = 0.0;
+                    _zipSkipArmed = false;
+                  }
+                });
+              }
+            }
+          },
+          onVerticalDragEnd: (_) => _handleZipperRelease(),
+          onTap: () {
+            // 轻点手柄也尝试推进动画
+            final double next = (_zipProgress + 0.2).clamp(0.0, 1.0);
+            if (next >= 0.95) {
+              _completeZipperReveal();
+            } else {
+              setState(() {
+                _zipProgress = next;
+                _zipSkipArmed = false;
+                _zipDragOffset = 0.0;
+              });
+            }
+          },
+          child: Stack(
+            children: <Widget>[
+              Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: visualProgress < 0.1
+                    ? 0
+                    : (fullHeight - panelHeight), // 初始状态完全遮盖
+                child: buildPanel(true),
+              ),
+              Positioned(
+                bottom: 0,
+                left: 0,
+                right: 0,
+                top: visualProgress < 0.1
+                    ? 0
+                    : (fullHeight - panelHeight), // 初始状态完全遮盖
+                child: buildPanel(false),
+              ),
+              Align(
+                alignment: Alignment.center,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    buildTeeth(),
+                    const SizedBox(height: 12),
+                    Transform.translate(
+                      offset: Offset(
+                        0,
+                        handleOffset - handleTravel / 1.6,
+                      ), // 往上一点点
+                      child: Container(
+                        width: 56,
+                        height: 56,
+                        decoration: BoxDecoration(
+                          color: Colors.grey.shade400,
+                          borderRadius: BorderRadius.circular(28),
+                          boxShadow: <BoxShadow>[
+                            BoxShadow(
+                              color: Colors.grey.shade300,
+                              blurRadius: 12,
+                              offset: const Offset(0, 0), // 居中阴影
+                            ),
+                          ],
+                        ),
+                        alignment: Alignment.center,
+                        child: const Icon(
+                          Icons.unfold_more,
+                          color: Colors.white,
+                          size: 28,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 
@@ -944,13 +1228,20 @@ class _PracticePageState extends State<PracticePage> {
       Future<void>.delayed(Duration(milliseconds: isRight ? 500 : 900), () {
         if (!mounted) return;
         if (isRight) {
-          // 显示成功，并弹出确认按钮，等待用户选择是否知道词义
+          // 显示成功，并弹出拉链特效，等待用户开启词义练习
           setState(() {
             answerState = _AnswerState.success;
             _resetScrollFlag(); // 成功时重置滚动标志
-            _showConfirmButtons = true;
+            _showZipperOverlay = true;
+            _zipProgress = 0.0;
+            _showColoredWordGroup = true;
+            _zipSkipArmed = false;
           });
           // 不自动切换，等待用户操作：知道 -> 跳到下一个单词；再看看 -> 进入翻译练习
+          Future<void>.delayed(const Duration(milliseconds: 500), () {
+            if (!mounted) return;
+            _middleWordController?.forward();
+          });
         } else {
           _cancelAutoAdvance();
           setState(() {
@@ -964,25 +1255,6 @@ class _PracticePageState extends State<PracticePage> {
         }
       });
     }
-  }
-
-  void _onKnowPressed() {
-    // 用户确认知道词义：隐藏按钮并直接进入下一个单词
-    if (!mounted) return;
-    setState(() {
-      _showConfirmButtons = false;
-    });
-    // 直接跳到下一题
-    _next();
-  }
-
-  void _onReviewPressed() {
-    // 用户选择再看看：进入翻译练习
-    if (!mounted) return;
-    setState(() {
-      _showConfirmButtons = false;
-    });
-    _transitionAfterWordSolved();
   }
 
   void _transitionAfterWordSolved() {
@@ -999,6 +1271,10 @@ class _PracticePageState extends State<PracticePage> {
         activeOptionIndices = <int>[];
         answerState = _AnswerState.success;
         isDropLocked = false;
+        _showColoredWordGroup = false;
+        _showZipperOverlay = false;
+        _zipProgress = 0.0;
+        _zipSkipArmed = false;
       });
       _scheduleAutoAdvanceIfReady(restartTimer: true);
       return;
@@ -1011,9 +1287,77 @@ class _PracticePageState extends State<PracticePage> {
       answerState = _AnswerState.none;
       isDropLocked = false;
       activeOptionIndices = <int>[];
+      _showColoredWordGroup = false;
+      _showZipperOverlay = false;
+      _zipProgress = 0.0;
+      _zipSkipArmed = false;
       // 开始新组时显示instruction
     });
     _prepareOptions();
+  }
+
+  void _handleZipperRelease() {
+    if (!_showZipperOverlay) return;
+    // 如果在拖拽过程中已达阈值，拖起时完成（优先处理 shouldComplete）
+    if (_zipShouldComplete) {
+      _zipShouldComplete = false;
+      _completeZipperReveal();
+      return;
+    }
+    // Determine halfHeight for pull-up threshold.
+    final double halfHeight =
+        _lastZipperHalfHeight ?? (MediaQuery.of(context).size.height / 4.0);
+
+    // If progress fully opened by downward pull, complete reveal.
+    if (_zipProgress >= 0.9) {
+      _completeZipperReveal();
+      return;
+    }
+
+    // If user pulled up far enough (visual top), treat as complete as well.
+    if (_zipDragOffset < 0) {
+      final double pullUpAbs = _zipDragOffset.abs();
+      // Require near-full pull (90% of halfHeight) to complete, matching down behavior.
+      if (pullUpAbs >= max(halfHeight * 0.9, 40.0)) {
+        _completeZipperReveal();
+        return;
+      }
+    }
+
+    // If armed for skip (short upward pull) and not actually opening, skip to next word.
+    if (_zipSkipArmed && _zipProgress <= 0.05) {
+      _skipToNextWord();
+      return;
+    }
+
+    // Otherwise revert to initial state.
+    setState(() {
+      _zipProgress = 0.0;
+      _zipSkipArmed = false;
+      _zipDragOffset = 0.0;
+    });
+  }
+
+  void _completeZipperReveal() {
+    if (!_showZipperOverlay) return;
+    setState(() {
+      _zipProgress = 1.0;
+      _showZipperOverlay = false;
+      _zipSkipArmed = false;
+      _zipShouldComplete = false;
+    });
+    _transitionAfterWordSolved();
+  }
+
+  void _skipToNextWord() {
+    if (!_showZipperOverlay) return;
+    _cancelAutoAdvance();
+    setState(() {
+      _zipProgress = 0.0;
+      _showZipperOverlay = false;
+      _zipSkipArmed = false;
+    });
+    _next();
   }
 
   void _handleTranslationSelection(int optionIndex, String token) {
@@ -1282,6 +1626,10 @@ class _PracticePageState extends State<PracticePage> {
         _completedMeanings.clear(); // 清空已完成的词意组列表
         _isWaitingBetweenMeanings = false; // 重置等待标志
         _initializeTranslationStage();
+        _showColoredWordGroup = false;
+        _showZipperOverlay = false;
+        _zipProgress = 0.0;
+        _zipSkipArmed = false;
       });
       _prepareOptions();
     } else {
@@ -2192,7 +2540,10 @@ class _OptionsKeyboardState extends State<_OptionsKeyboard>
         );
         _positions.add(_clampToBounds(candidate));
         // give reasonable initial velocity
-        final double speed = ((_minSpeed + _maxSpeed) / 2) * _speedMultiplier;
+        double speed = ((_minSpeed + _maxSpeed) / 2) * _speedMultiplier;
+        // 非可拖拽项（无法拖动或非正确索引）使用更高速度以增加运动感
+        final bool isDraggable = widget.canDrag && _isIndexCorrect(i);
+        if (!isDraggable) speed *= 2.0;
         _velocities.add(_randomUnitVector() * speed);
       }
     } else {
@@ -2261,10 +2612,13 @@ class _OptionsKeyboardState extends State<_OptionsKeyboard>
       final double normalizedWeight = widget.weights.isEmpty
           ? 0.5
           : ((widget.weights[i] - minWeight) / weightRange).clamp(0.0, 1.0);
-      final double speed =
+      double speed =
           (_minSpeed + (_maxSpeed - _minSpeed) * normalizedWeight) *
           countFactor *
           _speedMultiplier;
+      // 如果当前项不可拖拽，则加速显示（速度翻倍）
+      final bool isDraggable = widget.canDrag && _isIndexCorrect(i);
+      if (!isDraggable) speed *= 2.0;
       final Offset direction = _randomUnitVector();
       final Offset velocity = direction * speed;
       const double maxVelocity = 220.0;
