@@ -561,156 +561,175 @@ class _PracticePageState extends State<PracticePage> {
             return Stack(
               children: <Widget>[
                 SingleChildScrollView(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    mainAxisSize: MainAxisSize.min,
-                    children: <Widget>[
-                      _MaskedWord(
-                        word: displayWord,
-                        hiddenIndices: stageHiddenIndices,
-                        filledLetters: maskedFilledLetters,
-                        userFilledCount: maskedFilledLetters.length,
-                        state: isCompletedStage
-                            ? _AnswerState.success
-                            : answerState,
-                        onLetterDropped: isTranslationStage
-                            ? _onDropTranslationToken
-                            : _onDropLetter,
-                        dropLocked: isDropLocked || !isInteractiveStage,
-                        syllableBreakpoints:
-                            (isTranslationStage || isCompletedStage)
-                            ? null
-                            : current.syllableBreakpoints,
-                        isSnapping: _isSnapping,
-                        snapProgress: _snapProgress,
-                        nextBlankKey: isInteractiveStage ? _nextBlankKey : null,
-                        tempWrongIndices:
-                            (isTranslationStage || isCompletedStage)
-                            ? null
-                            : _tempWrongSlots,
-                        expectedLetters: expectedLetters,
-                        isTranslationStage: isTranslationStage,
-                      ),
-                      if (!isTranslationStage &&
-                          !isCompletedStage &&
-                          current.syllableBreakpoints != null &&
-                          current.syllableBreakpoints!.isNotEmpty)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 12),
-                          child: Text(
-                            current.getSyllableString(),
-                            style: TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w400,
-                              color: Colors.grey.shade600,
-                              letterSpacing: 0.5,
-                            ),
-                            textAlign: TextAlign.center,
-                          ),
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(
+                      minHeight: constraints.maxHeight,
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      mainAxisSize: MainAxisSize.min,
+                      children: <Widget>[
+                        _MaskedWord(
+                          word: displayWord,
+                          hiddenIndices: stageHiddenIndices,
+                          filledLetters: maskedFilledLetters,
+                          userFilledCount: maskedFilledLetters.length,
+                          state: isCompletedStage
+                              ? _AnswerState.success
+                              : answerState,
+                          onLetterDropped: isTranslationStage
+                              ? _onDropTranslationToken
+                              : _onDropLetter,
+                          dropLocked: isDropLocked || !isInteractiveStage,
+                          syllableBreakpoints:
+                              (isTranslationStage || isCompletedStage)
+                              ? null
+                              : current.syllableBreakpoints,
+                          isSnapping: _isSnapping,
+                          snapProgress: _snapProgress,
+                          nextBlankKey: isInteractiveStage
+                              ? _nextBlankKey
+                              : null,
+                          tempWrongIndices:
+                              (isTranslationStage || isCompletedStage)
+                              ? null
+                              : _tempWrongSlots,
+                          expectedLetters: expectedLetters,
+                          isTranslationStage: isTranslationStage,
                         ),
-                      // 成功后在答案区下方显示词义信息：
-                      // - 如果刚完成当前组（currentGroupCompleted），优先显示该组的中文释义（居中放大）
-                      // - 否则显示已有的已完成翻译汇总（较小字号）
-                      if (currentGroupCompleted)
-                        Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                          child: SizedBox(
-                            height: 88,
-                            child: Center(
-                              child: Text(
-                                current
-                                    .meanings[_currentMeaningIndex]
-                                    .translation
-                                    .join('、'),
-                                textAlign: TextAlign.center,
-                                style: TextStyle(
-                                  fontSize: 32,
-                                  fontWeight: FontWeight.w800,
-                                  color: completedDisplayColor,
+                        if (!isTranslationStage &&
+                            !isCompletedStage &&
+                            current.syllableBreakpoints != null &&
+                            current.syllableBreakpoints!.isNotEmpty)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 12),
+                            child: Text(
+                              current.getSyllableString(),
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w400,
+                                color: Colors.grey.shade600,
+                                letterSpacing: 0.5,
+                              ),
+                              textAlign: TextAlign.center,
+                            ),
+                          ),
+                        // 成功后在答案区下方显示词义信息：
+                        // - 如果刚完成当前组（currentGroupCompleted），优先显示该组的中文释义（居中放大）
+                        // - 否则显示已有的已完成翻译汇总（较小字号）
+                        if (currentGroupCompleted)
+                          Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                            child: SizedBox(
+                              height: 88,
+                              child: Center(
+                                child: Text(
+                                  current
+                                      .meanings[_currentMeaningIndex]
+                                      .translation
+                                      .join('、'),
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    fontSize: 32,
+                                    fontWeight: FontWeight.w800,
+                                    color: completedDisplayColor,
+                                  ),
                                 ),
                               ),
                             ),
+                          )
+                        else if (hasCompletedTranslations)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 12),
+                            child: Center(
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: completedTranslations
+                                    .map((String t) {
+                                      // 根据字数动态计算字号，短词更大
+                                      final int len = t
+                                          .replaceAll(RegExp(r"\s+"), '')
+                                          .length;
+                                      final double dynamicSize = len <= 2
+                                          ? 40.0
+                                          : len == 3
+                                          ? 34.0
+                                          : len == 4
+                                          ? 28.0
+                                          : 22.0;
+                                      return Text(
+                                        t,
+                                        textAlign: TextAlign.center,
+                                        style: TextStyle(
+                                          fontSize: dynamicSize,
+                                          fontWeight: FontWeight.w700,
+                                          color: completedDisplayColor,
+                                        ),
+                                      );
+                                    })
+                                    .toList(growable: false),
+                              ),
+                            ),
                           ),
-                        )
-                      else if (hasCompletedTranslations)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 12),
-                          child: Center(
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: completedTranslations
-                                  .map(
-                                    (String t) => Text(
-                                      t,
-                                      textAlign: TextAlign.center,
-                                      style: TextStyle(
-                                        fontSize: 18,
-                                        fontWeight: FontWeight.w600,
-                                        color: completedDisplayColor,
+                        // 如果拼写成功且等待用户确认，显示两个调皮按钮
+                        if (_showConfirmButtons &&
+                            _stage == _PracticeStage.spelling)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 14),
+                            child: Center(
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: <Widget>[
+                                  ElevatedButton(
+                                    onPressed: _onKnowPressed,
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: Colors.green.shade600,
+                                      foregroundColor: Colors.white,
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(20),
                                       ),
                                     ),
-                                  )
-                                  .toList(growable: false),
+                                    child: const Padding(
+                                      padding: EdgeInsets.symmetric(
+                                        horizontal: 14,
+                                        vertical: 10,
+                                      ),
+                                      child: Text(
+                                        '我知道啦 👍',
+                                        style: TextStyle(fontSize: 16),
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  OutlinedButton(
+                                    onPressed: _onReviewPressed,
+                                    style: OutlinedButton.styleFrom(
+                                      foregroundColor: Colors.orange.shade700,
+                                      side: BorderSide(
+                                        color: Colors.orange.shade300,
+                                      ),
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(20),
+                                      ),
+                                    ),
+                                    child: const Padding(
+                                      padding: EdgeInsets.symmetric(
+                                        horizontal: 14,
+                                        vertical: 10,
+                                      ),
+                                      child: Text(
+                                        '再看看 😜',
+                                        style: TextStyle(fontSize: 16),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ),
                           ),
-                        ),
-                      // 如果拼写成功且等待用户确认，显示两个调皮按钮
-                      if (_showConfirmButtons &&
-                          _stage == _PracticeStage.spelling)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 14),
-                          child: Center(
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: <Widget>[
-                                ElevatedButton(
-                                  onPressed: _onKnowPressed,
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: Colors.green.shade600,
-                                    foregroundColor: Colors.white,
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(20),
-                                    ),
-                                  ),
-                                  child: const Padding(
-                                    padding: EdgeInsets.symmetric(
-                                      horizontal: 14,
-                                      vertical: 10,
-                                    ),
-                                    child: Text(
-                                      '我知道啦 👍',
-                                      style: TextStyle(fontSize: 16),
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(width: 12),
-                                OutlinedButton(
-                                  onPressed: _onReviewPressed,
-                                  style: OutlinedButton.styleFrom(
-                                    foregroundColor: Colors.orange.shade700,
-                                    side: BorderSide(
-                                      color: Colors.orange.shade300,
-                                    ),
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(20),
-                                    ),
-                                  ),
-                                  child: const Padding(
-                                    padding: EdgeInsets.symmetric(
-                                      horizontal: 14,
-                                      vertical: 10,
-                                    ),
-                                    child: Text(
-                                      '再看看 😜',
-                                      style: TextStyle(fontSize: 16),
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
                 // 左上角单词仅在翻译阶段显示，拼写阶段隐藏
