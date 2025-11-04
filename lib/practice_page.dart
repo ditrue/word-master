@@ -45,6 +45,27 @@ class PracticeQuestion {
     return hiddenIndices.map((int i) => word[i]).toList(growable: false);
   }
 
+  List<String> get syllableSegments {
+    if (word.isEmpty) return <String>[];
+    if (syllableBreakpoints == null || syllableBreakpoints!.isEmpty) {
+      return <String>[word];
+    }
+
+    final List<int> breakpoints = List<int>.from(syllableBreakpoints!)..sort();
+    final List<String> segments = <String>[];
+    int start = 0;
+    for (final int bp in breakpoints) {
+      final int clamped = bp.clamp(0, word.length);
+      if (clamped <= start) continue;
+      segments.add(word.substring(start, clamped));
+      start = clamped;
+    }
+    if (start < word.length) {
+      segments.add(word.substring(start));
+    }
+    return segments.isEmpty ? <String>[word] : segments;
+  }
+
   /// 获取音节拆分后的单词，使用连字符分隔
   String getSyllableString() {
     if (syllableBreakpoints == null || syllableBreakpoints!.isEmpty) {
@@ -76,7 +97,7 @@ class PracticePage extends StatefulWidget {
 
 enum _AnswerState { none, correct, incorrect, success }
 
-enum _PracticeStage { spelling, translation, completed }
+enum _PracticeStage { spelling, syllable, translation, completed }
 
 class _DragLetterPayload {
   _DragLetterPayload({required this.optionIndex, required this.letter});
@@ -106,7 +127,7 @@ class _PracticePageState extends State<PracticePage>
         Meaning(partOfSpeech: 'n.', translation: <String>['字典', '词典', '辞典']),
         Meaning(partOfSpeech: 'v.', translation: <String>['字典1', '词典2', '辞典3']),
       ],
-      syllableBreakpoints: <int>[2],
+      syllableBreakpoints: <int>[3],
     ),
     PracticeQuestion(
       word: 'beautiful',
@@ -162,6 +183,10 @@ class _PracticePageState extends State<PracticePage>
   bool isDropLocked = false; // 防止错误动画期间继续拖拽
   _PracticeStage _stage = _PracticeStage.spelling;
   final List<String> _translationTokens = <String>[];
+  List<String> _syllableSegments = <String>[];
+  final List<String> _syllableSelectedSegments = <String>[];
+  final List<int> _syllableUsedOptionIndices = <int>[];
+  int _syllableProgress = 0;
   final List<String> _selectedMeaningTokens = <String>[];
   final List<int> _translationUsedOptionIndices = <int>[];
   _PracticeStage? _lastOptionsStage;
@@ -205,19 +230,26 @@ class _PracticePageState extends State<PracticePage>
     _lastOptionsStage = null;
   }
 
-  List<String> get _currentSelectedItems => _stage == _PracticeStage.spelling
-      ? selectedLetters
-      : _selectedMeaningTokens;
+  List<String> get _currentSelectedItems {
+    if (_stage == _PracticeStage.spelling) return selectedLetters;
+    if (_stage == _PracticeStage.syllable) return _syllableSelectedSegments;
+    return _selectedMeaningTokens;
+  }
 
-  List<int> get _currentUsedIndices => _stage == _PracticeStage.spelling
-      ? usedOptionIndices
-      : _translationUsedOptionIndices;
+  List<int> get _currentUsedIndices {
+    if (_stage == _PracticeStage.spelling) return usedOptionIndices;
+    if (_stage == _PracticeStage.syllable) return _syllableUsedOptionIndices;
+    return _translationUsedOptionIndices;
+  }
 
-  List<String> get _currentExpectedItems => _stage == _PracticeStage.spelling
-      ? current.answerLetters
-      : _translationTokens;
+  List<String> get _currentExpectedItems {
+    if (_stage == _PracticeStage.spelling) return current.answerLetters;
+    if (_stage == _PracticeStage.syllable) return _syllableSegments;
+    return _translationTokens;
+  }
 
   bool get _isTranslationStage => _stage == _PracticeStage.translation;
+  bool get _isSyllableStage => _stage == _PracticeStage.syllable;
 
   Timer? _autoAdvanceTimer;
   final ValueNotifier<bool> _isSnapping = ValueNotifier<bool>(false);
@@ -280,12 +312,18 @@ class _PracticePageState extends State<PracticePage>
   }
 
   void _prepareOptions() {
-    final List<String> answersList = _stage == _PracticeStage.spelling
-        ? current.answerLetters
-        : _translationTokens;
-    final List<String> selectedList = _stage == _PracticeStage.spelling
-        ? selectedLetters
-        : _selectedMeaningTokens;
+    final List<String> answersList;
+    final List<String> selectedList;
+    if (_stage == _PracticeStage.spelling) {
+      answersList = current.answerLetters;
+      selectedList = selectedLetters;
+    } else if (_stage == _PracticeStage.syllable) {
+      answersList = _syllableSegments;
+      selectedList = _syllableSelectedSegments;
+    } else {
+      answersList = _translationTokens;
+      selectedList = _selectedMeaningTokens;
+    }
 
     final int totalCount = answersList.length;
     final int filledCount = selectedList.length.clamp(0, totalCount);
@@ -354,8 +392,9 @@ class _PracticePageState extends State<PracticePage>
         if (_translationUsedOptionIndices.contains(i)) continue;
         // 如果是单词项且已被选中（拖拽完成），不要在选项区再次显示
         if (answersList[i] == current.word &&
-            _selectedMeaningTokens.contains(current.word))
+            _selectedMeaningTokens.contains(current.word)) {
           continue;
+        }
         remainingAnswers.add(answersList[i]);
         remainingIndices.add(i);
         currentDisplayCount++;
@@ -528,6 +567,10 @@ class _PracticePageState extends State<PracticePage>
     required double translationOpacity,
     required bool translationVisible,
   }) {
+    if (_isSyllableStage) {
+      return _buildSyllableStageCard();
+    }
+
     final bool isTranslationStage = _stage == _PracticeStage.translation;
     final bool isCompletedStage = _stage == _PracticeStage.completed;
     final bool isInteractiveStage = !isCompletedStage;
@@ -989,6 +1032,154 @@ class _PracticePageState extends State<PracticePage>
     );
   }
 
+  Widget _buildSyllableStageCard() {
+    final List<String> segments = _syllableSegments.isNotEmpty
+        ? _syllableSegments
+        : current.syllableSegments;
+    final String word = current.word;
+    final int wordLen = word.length;
+    double baseFontSize;
+    if (wordLen <= 4) {
+      baseFontSize = 52;
+    } else if (wordLen <= 6) {
+      baseFontSize = 58;
+    } else if (wordLen <= 8) {
+      baseFontSize = 54;
+    } else if (wordLen <= 10) {
+      baseFontSize = 50;
+    } else {
+      baseFontSize = 56;
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: <BoxShadow>[
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 20,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          Wrap(
+            alignment: WrapAlignment.center,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 6,
+            runSpacing: 8,
+            children: <Widget>[
+              for (int i = 0; i < segments.length; i++) ...<Widget>[
+                _buildSyllableSegmentTile(i, segments[i], baseFontSize),
+                if (i < segments.length - 1)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 4.0),
+                    child: Text(
+                      '-',
+                      style: TextStyle(
+                        fontSize: baseFontSize * 0.9,
+                        color: Colors.grey.shade500,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+              ],
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSyllableSegmentTile(
+    int index,
+    String segment,
+    double baseFontSize,
+  ) {
+    final bool isCompleted = index < _syllableProgress;
+    final bool isActive = index == _syllableProgress;
+
+    // 计算基础尺寸（与单词拖拽选项一致）
+    final double baseItemSize = baseFontSize * 1.5;
+    final double textSize = baseFontSize * 0.8;
+
+    // 颜色方案：未完成的用灰色，已完成的用绿色
+    final Color activeColor = isCompleted
+        ? Colors.green.shade500
+        : Colors.grey.shade400;
+    final Color inactiveColor = Colors.grey.shade300;
+
+    final Gradient gradient = isCompleted || (isActive && segment.isNotEmpty)
+        ? LinearGradient(
+            colors: <Color>[
+              activeColor.withOpacity(0.95),
+              activeColor.withOpacity(0.75),
+            ],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          )
+        : LinearGradient(
+            colors: <Color>[
+              inactiveColor.withOpacity(0.65),
+              inactiveColor.withOpacity(0.45),
+            ],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          );
+
+    return DragTarget<_DragLetterPayload>(
+      onWillAccept: (payload) {
+        if (!_isSyllableStage || !isActive) return false;
+        if (payload == null) return false;
+        return payload.letter.toLowerCase() == segment.toLowerCase();
+      },
+      onAccept: (payload) => _onDropSyllableSegment(payload),
+      builder:
+          (
+            BuildContext context,
+            List<_DragLetterPayload?> candidateData,
+            List<dynamic> rejectedData,
+          ) {
+            final bool hovering = candidateData.isNotEmpty;
+            final bool isCorrect =
+                isCompleted || (isActive && segment.isNotEmpty);
+
+            // 使用与答案区一致的下划线样式（不是圆形），与单词完成后的显示保持一致
+            final Color textColor = isCompleted
+                ? Colors.green.shade600
+                : Colors.grey.shade500;
+            final Color borderColor = isCompleted
+                ? Colors.green.shade400
+                : Colors.grey.shade300;
+
+            // 仅显示文本（无下划线），分组间用 '-' 连接，由父级负责插入分隔符
+            return Padding(
+              padding: const EdgeInsets.symmetric(
+                horizontal: 4.0,
+                vertical: 2.0,
+              ),
+              child: Text(
+                segment.toLowerCase(),
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: baseFontSize,
+                  fontWeight: FontWeight.w700,
+                  color: textColor,
+                  letterSpacing: 0.1,
+                  height: 1.0,
+                ),
+              ),
+            );
+          },
+    );
+  }
+
   Widget _buildOptionsSection() {
     // 如果还未初始化，返回空容器
     if (!_isInitialized) {
@@ -1049,7 +1240,8 @@ class _PracticePageState extends State<PracticePage>
                               return false;
                             }
                             final String option = entry.value;
-                            if (_stage == _PracticeStage.spelling) {
+                            if (_stage == _PracticeStage.spelling ||
+                                _stage == _PracticeStage.syllable) {
                               return option.toLowerCase() ==
                                   expectedItem.toLowerCase();
                             }
@@ -1223,6 +1415,10 @@ class _PracticePageState extends State<PracticePage>
   }
 
   void _onTapLetter(int optionIndex, String letter) {
+    if (_stage == _PracticeStage.syllable) {
+      _handleSyllableSelection(optionIndex, letter);
+      return;
+    }
     if (_isTranslationStage) {
       _handleTranslationSelection(optionIndex, letter);
       return;
@@ -1247,19 +1443,14 @@ class _PracticePageState extends State<PracticePage>
       Future<void>.delayed(Duration(milliseconds: isRight ? 500 : 900), () {
         if (!mounted) return;
         if (isRight) {
-          // 显示成功，显示倒计时后显示继续按钮
           setState(() {
             answerState = _AnswerState.success;
             _resetScrollFlag(); // 成功时重置滚动标志
             // 去除彩色单词动画效果，直接显示完成的单词
             // _showColoredWordGroup = true;
-            _showWordCompleteCountdown = true;
-            _countdownSeconds = 3;
-            _showContinueButton = false;
           });
 
-          // 开始倒计时
-          _startWordCompleteCountdown();
+          _beginPostSpellingFlow();
         } else {
           _cancelAutoAdvance();
           setState(() {
@@ -1302,12 +1493,54 @@ class _PracticePageState extends State<PracticePage>
       _lastOptionsStage = null;
       answerState = _AnswerState.none;
       isDropLocked = false;
+      _syllableSegments = <String>[];
+      _syllableSelectedSegments.clear();
+      _syllableUsedOptionIndices.clear();
+      _syllableProgress = 0;
       activeOptionIndices = <int>[];
       _showColoredWordGroup = false;
       _showZipperOverlay = false;
       // 开始翻译阶段
     });
     _prepareOptions();
+  }
+
+  void _beginPostSpellingFlow() {
+    final List<String> segments = current.syllableSegments;
+    final bool hasMultipleSegments =
+        segments.where((String s) => s.trim().isNotEmpty).length > 1;
+
+    if (!hasMultipleSegments) {
+      _syllableSegments = <String>[];
+      _syllableSelectedSegments.clear();
+      _syllableUsedOptionIndices.clear();
+      _syllableProgress = 0;
+      _beginTranslationCountdown();
+      return;
+    }
+
+    setState(() {
+      _stage = _PracticeStage.syllable;
+      _syllableSegments = List<String>.from(segments);
+      _syllableSelectedSegments.clear();
+      _syllableUsedOptionIndices.clear();
+      _syllableProgress = 0;
+      _showWordCompleteCountdown = false;
+      _showContinueButton = false;
+      isDropLocked = false;
+    });
+    _prepareOptions();
+  }
+
+  void _beginTranslationCountdown() {
+    setState(() {
+      _showWordCompleteCountdown = true;
+      _countdownSeconds = 3;
+      _showContinueButton = false;
+      activeOptions = <String>[];
+      activeOptionIndices = <int>[];
+    });
+    _startWordCompleteCountdown();
   }
 
   void _startWordCompleteCountdown() {
@@ -1331,11 +1564,53 @@ class _PracticePageState extends State<PracticePage>
     });
   }
 
+  void _onSyllableStageCompleted() {
+    if (_stage != _PracticeStage.syllable) return;
+    if (_syllableProgress < _syllableSegments.length) return;
+
+    setState(() {
+      activeOptions = <String>[];
+      activeOptionIndices = <int>[];
+    });
+
+    _beginTranslationCountdown();
+  }
+
   void _onContinueButtonPressed() {
     setState(() {
       _showContinueButton = false;
     });
     _transitionAfterWordSolved();
+  }
+
+  void _handleSyllableSelection(int optionIndex, String segment) {
+    if (_stage != _PracticeStage.syllable) return;
+    if (_syllableSegments.isEmpty) return;
+
+    final int expectedIndex = _syllableProgress;
+    if (expectedIndex >= _syllableSegments.length) return;
+
+    final String expectedSegment = _syllableSegments[expectedIndex];
+    if (segment.toLowerCase() != expectedSegment.toLowerCase()) {
+      return;
+    }
+
+    final int absoluteIndex =
+        (optionIndex >= 0 && optionIndex < activeOptionIndices.length)
+        ? activeOptionIndices[optionIndex]
+        : expectedIndex;
+
+    _cancelAutoAdvance();
+    setState(() {
+      _syllableSelectedSegments.add(expectedSegment);
+      _syllableUsedOptionIndices.add(absoluteIndex);
+      _syllableProgress = expectedIndex + 1;
+    });
+    _prepareOptions();
+
+    if (_syllableProgress >= _syllableSegments.length) {
+      _onSyllableStageCompleted();
+    }
   }
 
   void _handleTranslationSelection(int optionIndex, String token) {
@@ -1381,6 +1656,19 @@ class _PracticePageState extends State<PracticePage>
     }
 
     _handleTranslationSelection(optionIndex, token);
+  }
+
+  void _onDropSyllableSegment(_DragLetterPayload payload) {
+    if (!_isSyllableStage) return;
+    int optionIndex = payload.optionIndex;
+    final String segment = payload.letter;
+
+    if (optionIndex < 0 || optionIndex >= activeOptions.length) {
+      optionIndex = activeOptions.indexOf(segment);
+      if (optionIndex == -1) return;
+    }
+
+    _handleSyllableSelection(optionIndex, segment);
   }
 
   void _completeTranslationStage() {
@@ -1434,6 +1722,10 @@ class _PracticePageState extends State<PracticePage>
   }
 
   void _onDropLetter(_DragLetterPayload payload) {
+    if (_isSyllableStage) {
+      _onDropSyllableSegment(payload);
+      return;
+    }
     if (_isTranslationStage) {
       _onDropTranslationToken(payload);
       return;
@@ -1618,6 +1910,10 @@ class _PracticePageState extends State<PracticePage>
         _showWordCompleteCountdown = false;
         _showContinueButton = false;
         _countdownSeconds = 3;
+        _syllableSegments = <String>[];
+        _syllableSelectedSegments.clear();
+        _syllableUsedOptionIndices.clear();
+        _syllableProgress = 0;
       });
       _prepareOptions();
     } else {
@@ -1837,7 +2133,7 @@ class _MaskedWord extends StatelessWidget {
         if (matchesExpected &&
             blankOrder < userFilledCount &&
             syllableBreakpoints != null &&
-            syllableBreakpoints!.contains(i)) {
+            syllableBreakpoints!.contains(i + 1)) {
           children.add(
             Text(
               ' -',
@@ -1881,7 +2177,7 @@ class _MaskedWord extends StatelessWidget {
         // 如果是已完成的字母，且在音节边界位置，添加分隔符
         if (i < firstUnfilledHiddenUser &&
             syllableBreakpoints != null &&
-            syllableBreakpoints!.contains(i)) {
+            syllableBreakpoints!.contains(i + 1)) {
           children.add(
             Text(
               ' ',
@@ -2247,10 +2543,7 @@ class _AnimatedBlankCellState extends State<_AnimatedBlankCell>
                   36.0,
                 ); // 拼写阶段保持底部
           // 进一步缩小字母与下划线之间的间距，让字母更靠近下划线
-          final double letterOffset = max(
-            1.0,
-            (rawLetterOffset as double) - 12.0,
-          );
+          final double letterOffset = max(1.0, rawLetterOffset - 12.0);
           final double cellWidth = widget.width ?? 80.0;
 
           return Transform.scale(
@@ -2315,10 +2608,7 @@ class _AnimatedBlankCellState extends State<_AnimatedBlankCell>
                 6.0,
                 36.0,
               ); // 拼写阶段保持底部
-        final double letterOffset = max(
-          1.0,
-          (rawLetterOffset as double) - 12.0,
-        );
+        final double letterOffset = max(1.0, rawLetterOffset - 12.0);
 
         // 使用固定的宽度保持一致性
         final double cellWidth = widget.width ?? 80.0;
