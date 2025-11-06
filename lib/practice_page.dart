@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'dart:async';
 import 'dart:math';
 
@@ -85,6 +86,47 @@ class PracticeQuestion {
       sb.write(word.substring(start));
     }
     return sb.toString();
+  }
+}
+
+class _DashedLine extends StatelessWidget {
+  const _DashedLine({
+    super.key,
+    required this.color,
+    this.thickness = 2.0,
+    this.dashWidth = 6.0,
+    this.gapWidth = 4.0,
+  });
+
+  final Color color;
+  final double thickness;
+  final double dashWidth;
+  final double gapWidth;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final double available = constraints.maxWidth;
+        if (available.isInfinite || available <= 0) {
+          return SizedBox.shrink();
+        }
+        final int count = (available / (dashWidth + gapWidth)).floor();
+        if (count <= 0) return SizedBox.shrink();
+        return Row(
+          mainAxisSize: MainAxisSize.min,
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: List<Widget>.generate(count, (int i) {
+            return Container(
+              width: dashWidth,
+              height: thickness,
+              margin: EdgeInsets.only(right: i == count - 1 ? 0.0 : gapWidth),
+              color: color,
+            );
+          }),
+        );
+      },
+    );
   }
 }
 
@@ -181,6 +223,7 @@ class _PracticePageState extends State<PracticePage>
   List<int> activeOptionIndices = <int>[]; // 候选选项对应原始答案列表的索引
   final Random _rnd = Random();
   bool isDropLocked = false; // 防止错误动画期间继续拖拽
+  bool _isSmearCompleted = false; // 当前字母拖拽是否完成
   _PracticeStage _stage = _PracticeStage.spelling;
   final List<String> _translationTokens = <String>[];
   List<String> _syllableSegments = <String>[];
@@ -397,7 +440,7 @@ class _PracticePageState extends State<PracticePage>
       ) {
         // 如果该项已被标记为使用则跳过
         if (_translationUsedOptionIndices.contains(i)) continue;
-        // NOTE: 保持已选中的单词在选项区位置不变（不再隐藏已选单词），以满足“成功的单词位置保持不变”的需求
+        // NOTE: 保持已选中的单词在选项区位置不变（不再隐藏已选单词），以满足"成功的单词位置保持不变"的需求
         remainingAnswers.add(answersList[i]);
         remainingIndices.add(i);
         currentDisplayCount++;
@@ -1353,7 +1396,7 @@ class _PracticePageState extends State<PracticePage>
             List<_DragLetterPayload?> candidateData,
             List<dynamic> rejectedData,
           ) {
-            final bool hovering = candidateData.isNotEmpty;
+            final bool isHovering = candidateData.isNotEmpty;
             final bool isCorrect =
                 isCompleted || (isActive && segment.isNotEmpty);
 
@@ -1477,32 +1520,53 @@ class _PracticePageState extends State<PracticePage>
             final bool showZipper =
                 _showZipperOverlay && _stage == _PracticeStage.spelling;
 
-            final Widget keyboard = Padding(
-              padding: const EdgeInsets.all(16),
-              child: _OptionsKeyboard(
-                options: activeOptions,
-                weights: optionWeights,
-                colors: optionColors,
-                topPadding: _optionRowTopPadding,
-                usedOptionIndices: _currentUsedIndices,
-                onTapLetter: _onTapLetter,
-                dragOnly: true,
-                canDrag: !isDropLocked && !_isWaitingBetweenMeanings,
-                correctIndex: correctIndex,
-                isSnapping: _isSnapping,
-                snapProgress: _snapProgress,
-                isTranslationStage: _isTranslationStage,
-                optionIndices: activeOptionIndices,
-                wordCompleted:
-                    _currentMeaningIndex > 0 ||
-                    _selectedMeaningTokens.contains(current.word),
-                baseFontSize: _computeBaseFontSizeForWord(current.word),
-              ),
-            );
+            Widget stageContent;
+            if (_stage == _PracticeStage.spelling) {
+              final String currentLetter = (expectedItem ?? '').trim();
+              Color letterColor;
+              if (optionColors.isNotEmpty) {
+                if (correctIndex >= 0 && correctIndex < optionColors.length) {
+                  letterColor = optionColors[correctIndex];
+                } else {
+                  letterColor = optionColors.first;
+                }
+              } else {
+                letterColor = Theme.of(context).colorScheme.primary;
+              }
+              stageContent = _LetterDragSelection(
+                expectedLetter: currentLetter,
+                isCompleted: _isSmearCompleted,
+                activeColor: letterColor,
+                onLetterMatched: _onLetterMatched,
+              );
+            } else {
+              stageContent = Padding(
+                padding: const EdgeInsets.all(16),
+                child: _OptionsKeyboard(
+                  options: activeOptions,
+                  weights: optionWeights,
+                  colors: optionColors,
+                  topPadding: _optionRowTopPadding,
+                  usedOptionIndices: _currentUsedIndices,
+                  onTapLetter: _onTapLetter,
+                  dragOnly: true,
+                  canDrag: !isDropLocked && !_isWaitingBetweenMeanings,
+                  correctIndex: correctIndex,
+                  isSnapping: _isSnapping,
+                  snapProgress: _snapProgress,
+                  isTranslationStage: _isTranslationStage,
+                  optionIndices: activeOptionIndices,
+                  wordCompleted:
+                      _currentMeaningIndex > 0 ||
+                      _selectedMeaningTokens.contains(current.word),
+                  baseFontSize: _computeBaseFontSizeForWord(current.word),
+                ),
+              );
+            }
 
             return Stack(
               children: <Widget>[
-                keyboard,
+                stageContent,
                 if (showZipper)
                   Positioned.fill(
                     child: ClipRRect(
@@ -1812,6 +1876,68 @@ class _PracticePageState extends State<PracticePage>
       _showContinueButton = false;
     });
     _transitionAfterWordSolved();
+  }
+
+  void _onLetterMatched(String letter) {
+    if (_stage == _PracticeStage.spelling &&
+        selectedLetters.length < current.hiddenIndices.length) {
+      // 获取当前应该填写的字母
+      final int nextOrder = selectedLetters.length;
+      final int nextIndex = current.hiddenIndices[nextOrder];
+      final String expected = current.word[nextIndex];
+
+      if (letter.toLowerCase() == expected.toLowerCase()) {
+        // 匹配正确，添加到答案中
+        _cancelAutoAdvance();
+        setState(() {
+          selectedLetters.add(letter);
+          usedOptionIndices.add(0); // 模拟添加一个使用的索引
+          _isSmearCompleted = true; // 标记拖拽完成
+        });
+
+        // 更新候选显示
+        _prepareOptions();
+
+        if (selectedLetters.length == current.hiddenIndices.length) {
+          final bool isRight = _isAnswerCorrect();
+          setState(
+            () => answerState = isRight
+                ? _AnswerState.correct
+                : _AnswerState.incorrect,
+          );
+          Future<void>.delayed(Duration(milliseconds: isRight ? 500 : 900), () {
+            if (!mounted) return;
+            if (isRight) {
+              setState(() {
+                answerState = _AnswerState.success;
+                _resetScrollFlag();
+                _isSmearCompleted = false; // 重置拖拽状态为下一题准备
+              });
+              _beginPostSpellingFlow();
+            } else {
+              _cancelAutoAdvance();
+              setState(() {
+                selectedLetters.clear();
+                usedOptionIndices.clear();
+                answerState = _AnswerState.none;
+                _resetScrollFlag();
+                _isSmearCompleted = false; // 重置拖拽状态
+              });
+              _prepareOptions();
+            }
+          });
+        } else {
+          // 如果还没完成整个单词，短暂延迟后重置拖拽状态，准备下一个字母
+          Future<void>.delayed(const Duration(milliseconds: 800), () {
+            if (mounted) {
+              setState(() {
+                _isSmearCompleted = false; // 重置拖拽状态，准备下一个字母
+              });
+            }
+          });
+        }
+      }
+    }
   }
 
   void _handleSyllableSelection(int optionIndex, String segment) {
@@ -2284,11 +2410,11 @@ class _MaskedWord extends StatelessWidget {
       baseFontSize = 56; // 进一步增大单词字体
     }
 
-    final TextStyle visibleStyle = TextStyle(
+    final TextStyle visibleStyle = GoogleFonts.kalam(
       fontSize: baseFontSize,
-      fontWeight: FontWeight.w800,
+      fontWeight: FontWeight.w900,
       color: Colors.black87,
-      letterSpacing: isTranslationStage ? 0.0 : 0.1, // 中文不需要字母间距，英文间距进一步缩小
+      letterSpacing: isTranslationStage ? 0.0 : 0.8, // 中文不需要字母间距，英文间距调整
       height: 1.0,
     );
 
@@ -3089,7 +3215,6 @@ class _OptionsKeyboardState extends State<_OptionsKeyboard>
   double _itemSize = 110.0;
   List<Offset> _positions = <Offset>[];
   List<Offset> _velocities = <Offset>[];
-  Set<int> _draggedIndices = <int>{};
   int _lastCorrectIndex = -1; // 跟踪上一次的正确索引
   late final AnimationController _scaleController;
   late final Animation<double> _scaleAnimation;
@@ -3282,9 +3407,6 @@ class _OptionsKeyboardState extends State<_OptionsKeyboard>
     final double maxY = max(0.0, _movementBounds.height);
 
     for (int i = 0; i < _positions.length; i += 1) {
-      // 跳过正在被拖拽的选项
-      if (_draggedIndices.contains(i)) continue;
-
       Offset pos = _positions[i] + _velocities[i] * dt;
       Offset vel = _velocities[i];
 
@@ -3335,22 +3457,9 @@ class _OptionsKeyboardState extends State<_OptionsKeyboard>
           continue;
         }
 
-        final bool iDragged = _draggedIndices.contains(i);
-        final bool jDragged = _draggedIndices.contains(j);
         final double overlap = collisionDistance - distance;
-
-        double moveI;
-        double moveJ;
-        if (iDragged && !jDragged) {
-          moveI = 0;
-          moveJ = overlap;
-        } else if (jDragged && !iDragged) {
-          moveI = overlap;
-          moveJ = 0;
-        } else {
-          moveI = overlap / 2;
-          moveJ = overlap / 2;
-        }
+        final double moveI = overlap / 2;
+        final double moveJ = overlap / 2;
 
         centerI = _clampCenterWithinBounds(
           centerI - direction * moveI,
@@ -3361,11 +3470,10 @@ class _OptionsKeyboardState extends State<_OptionsKeyboard>
           baseSizeJ,
         );
 
-        if (!iDragged && !jDragged) {
-          final Offset temp = _velocities[i];
-          _velocities[i] = _velocities[j];
-          _velocities[j] = temp;
-        }
+        // 交换速度向量
+        final Offset temp = _velocities[i];
+        _velocities[i] = _velocities[j];
+        _velocities[j] = temp;
 
         _positions[i] = _topLeftFromCenter(centerI, baseSizeI);
         _positions[j] = _topLeftFromCenter(centerJ, baseSizeJ);
@@ -3373,24 +3481,22 @@ class _OptionsKeyboardState extends State<_OptionsKeyboard>
         // Secondary check in case clamping caused residual overlap
         final Offset updatedDelta = centerJ - centerI;
         final double updatedDistance = updatedDelta.distance;
-        if (updatedDistance < collisionDistance && (iDragged || jDragged)) {
+        if (updatedDistance < collisionDistance) {
           final Offset dir = updatedDistance <= 1e-6
               ? _randomUnitVector()
               : updatedDelta / updatedDistance;
           final double extra = collisionDistance - updatedDistance;
-          if (iDragged && !jDragged) {
-            centerJ = _clampCenterWithinBounds(
-              centerJ + dir * extra,
-              baseSizeJ,
-            );
-            _positions[j] = _topLeftFromCenter(centerJ, baseSizeJ);
-          } else if (jDragged && !iDragged) {
-            centerI = _clampCenterWithinBounds(
-              centerI - dir * extra,
-              baseSizeI,
-            );
-            _positions[i] = _topLeftFromCenter(centerI, baseSizeI);
-          }
+          // 平均分开移动
+          centerI = _clampCenterWithinBounds(
+            centerI - dir * (extra / 2),
+            baseSizeI,
+          );
+          centerJ = _clampCenterWithinBounds(
+            centerJ + dir * (extra / 2),
+            baseSizeJ,
+          );
+          _positions[i] = _topLeftFromCenter(centerI, baseSizeI);
+          _positions[j] = _topLeftFromCenter(centerJ, baseSizeJ);
         }
       }
     }
@@ -3455,7 +3561,6 @@ class _OptionsKeyboardState extends State<_OptionsKeyboard>
 
     if ((oldMaxX - newMaxX).abs() > 0.5 || (oldMaxY - newMaxY).abs() > 0.5) {
       for (int i = 0; i < _positions.length; i += 1) {
-        if (_draggedIndices.contains(i)) continue;
         final Offset pos = _positions[i];
         final double ratioX = oldMaxX <= 1e-3 ? 0.5 : (pos.dx / oldMaxX);
         final double ratioY = oldMaxY <= 1e-3 ? 0.5 : (pos.dy / oldMaxY);
@@ -3481,16 +3586,6 @@ class _OptionsKeyboardState extends State<_OptionsKeyboard>
         ? 0.95
         : 0.85;
     return (baseSize * sizeMultiplier).clamp(_minItemSize, _maxItemSize);
-  }
-
-  void _setDragging(int index, bool isDragging) {
-    setState(() {
-      if (isDragging) {
-        _draggedIndices.add(index);
-      } else {
-        _draggedIndices.remove(index);
-      }
-    });
   }
 
   bool _isIndexCorrect(int index) {
@@ -3823,161 +3918,565 @@ class _OptionsKeyboardState extends State<_OptionsKeyboard>
       },
     );
 
-    if (!dragEnabled) {
-      return bubble;
+    // 移除拖拽功能，直接返回bubble
+    return bubble;
+  }
+}
+
+class _LetterDragSelection extends StatefulWidget {
+  const _LetterDragSelection({
+    required this.expectedLetter,
+    required this.activeColor,
+    required this.onLetterMatched,
+    required this.isCompleted,
+  });
+
+  final String expectedLetter;
+  final Color activeColor;
+  final ValueChanged<String> onLetterMatched;
+  final bool isCompleted;
+
+  @override
+  State<_LetterDragSelection> createState() => _LetterDragSelectionState();
+}
+
+class _LetterDragSelectionState extends State<_LetterDragSelection> {
+  static const double _badgeSize = 180;
+  static const Offset _defaultFeedbackOffset = Offset(0, -15);
+  static const double _coverageThreshold = 0.9;
+
+  bool _isDragging = false;
+  bool _hasMatched = false;
+  bool _isLetterCoveringTarget = false;
+
+  Offset? _dragPointerOffset;
+  Offset? _latestGlobalDragPosition;
+  final GlobalKey _targetKey = GlobalKey();
+  final GlobalKey _sourceKey = GlobalKey(); // 添加源位置的key
+  bool _isAutoSnapped = false;
+  Color? _currentDraggingColor; // 当前拖拽项颜色，用于目标处显示一致颜色
+  OverlayEntry? _dragOverlayEntry;
+  final ValueNotifier<Offset?> _overlayPositionNotifier =
+      ValueNotifier<Offset?>(null);
+  bool _overlayLockedToTarget = false;
+  double? _fixedVerticalPosition; // 固定垂直位置
+
+  @override
+  void didUpdateWidget(covariant _LetterDragSelection oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final bool letterChanged =
+        widget.expectedLetter.toLowerCase() !=
+        oldWidget.expectedLetter.toLowerCase();
+    if (letterChanged || (!widget.isCompleted && oldWidget.isCompleted)) {
+      _hasMatched = false;
+      _isLetterCoveringTarget = false;
+      _dragPointerOffset = null;
+      _latestGlobalDragPosition = null;
+      _isAutoSnapped = false;
+      _removeOverlay();
+      _currentDraggingColor = null;
+      _fixedVerticalPosition = null; // 重置固定垂直位置
+    }
+    if (widget.expectedLetter.isEmpty) {
+      _hasMatched = false;
+      _isLetterCoveringTarget = false;
+      _dragPointerOffset = null;
+      _latestGlobalDragPosition = null;
+      _isAutoSnapped = false;
+      _removeOverlay();
+      _currentDraggingColor = null;
+      _fixedVerticalPosition = null; // 重置固定垂直位置
+    }
+  }
+
+  @override
+  void dispose() {
+    _removeOverlay();
+    _overlayPositionNotifier.dispose();
+    super.dispose();
+  }
+
+  Rect? _getTargetRect() {
+    final RenderBox? targetBox =
+        _targetKey.currentContext?.findRenderObject() as RenderBox?;
+    if (targetBox == null) {
+      return null;
+    }
+    final Offset targetTopLeft = targetBox.localToGlobal(Offset.zero);
+    return targetTopLeft & targetBox.size;
+  }
+
+  bool _isCoveringTarget(Offset pointerGlobalPosition) {
+    final Rect? targetRect = _getTargetRect();
+    if (targetRect == null) {
+      return false;
     }
 
-    // 将 payload.optionIndex 设置为原始选项的索引（如果提供了 optionIndices）
-    final int originalIndex = (index < widget.optionIndices.length)
-        ? widget.optionIndices[index]
-        : index;
-    final _DragLetterPayload payload = _DragLetterPayload(
-      optionIndex: originalIndex,
-      letter: widget.options[index],
+    // 字母中心对齐到拖拽点，所以拖拽矩形的左上角是 pointerGlobalPosition - Offset(_badgeSize / 2, _badgeSize / 2)
+    final double fixedY =
+        _fixedVerticalPosition ?? (pointerGlobalPosition.dy - _badgeSize / 2);
+    final Offset dragTopLeft = Offset(
+      pointerGlobalPosition.dx - _badgeSize / 2, // 水平方向：字母中心对齐到拖拽点
+      fixedY, // 垂直方向：保持固定位置
+    );
+    final Rect dragRect = Rect.fromLTWH(
+      dragTopLeft.dx,
+      dragTopLeft.dy,
+      _badgeSize,
+      _badgeSize,
     );
 
-    return Draggable<_DragLetterPayload>(
-      data: payload,
-      dragAnchorStrategy: childDragAnchorStrategy,
-      onDragStarted: () => _setDragging(index, true),
-      onDragEnd: (_) => _setDragging(index, false),
-      onDragCompleted: () => _setDragging(index, false),
-      feedback: _buildDragFeedback(
-        widget.options[index],
-        activeColor,
-        baseItemSize,
-        _visualScaleForIndex(index),
-        isCorrect,
-        isWordOption: isWordOption,
+    if (!dragRect.overlaps(targetRect)) {
+      return false;
+    }
+
+    final Rect intersection = Rect.fromLTRB(
+      max(dragRect.left, targetRect.left),
+      max(dragRect.top, targetRect.top),
+      min(dragRect.right, targetRect.right),
+      min(dragRect.bottom, targetRect.bottom),
+    );
+
+    if (intersection.width <= 0 || intersection.height <= 0) {
+      return false;
+    }
+
+    final double widthCoverage = intersection.width / targetRect.width;
+    final double heightCoverage = intersection.height / targetRect.height;
+
+    return widthCoverage >= _coverageThreshold &&
+        heightCoverage >= _coverageThreshold;
+  }
+
+  bool _isNearTarget(Offset pointerGlobalPosition, Rect targetRect) {
+    // 字母中心对齐到拖拽点
+    final double fixedY =
+        _fixedVerticalPosition ?? (pointerGlobalPosition.dy - _badgeSize / 2);
+    final Offset dragTopLeft = Offset(
+      pointerGlobalPosition.dx - _badgeSize / 2, // 水平方向：字母中心对齐到拖拽点
+      fixedY, // 垂直方向：保持固定位置
+    );
+    final Offset letterCenter =
+        dragTopLeft + Offset(_badgeSize / 2, _badgeSize / 2);
+    final Offset targetCenter = targetRect.center;
+
+    final double pointerDistance =
+        (pointerGlobalPosition - targetCenter).distance;
+    final double centerDistance = (letterCenter - targetCenter).distance;
+    final double snapRadius = max(
+      targetRect.longestSide * 0.35,
+      _badgeSize * 0.3,
+    );
+
+    return centerDistance <= snapRadius || pointerDistance <= snapRadius;
+  }
+
+  void _setLetterCovering(bool covering) {
+    if (_isLetterCoveringTarget == covering) {
+      return;
+    }
+    if (!mounted) {
+      _isLetterCoveringTarget = covering;
+      return;
+    }
+    setState(() {
+      _isLetterCoveringTarget = covering;
+    });
+  }
+
+  void _setAutoSnapped(bool snapped) {
+    if (_isAutoSnapped == snapped) {
+      return;
+    }
+    if (!mounted) {
+      _isAutoSnapped = snapped;
+      return;
+    }
+    setState(() {
+      _isAutoSnapped = snapped;
+    });
+  }
+
+  void _ensureOverlay(String letter) {
+    if (_dragOverlayEntry != null) {
+      return;
+    }
+    final OverlayState? overlayState = Overlay.of(context, rootOverlay: true);
+    if (overlayState == null) {
+      return;
+    }
+
+    // 拖拽时只显示文字，没有背景圆
+    final Widget badge = _buildLetterBadge(
+      letter: letter,
+      background: Colors.transparent, // 透明背景，无背景圆
+      textColor: Colors.green.shade700, // 保持原始文字颜色
+      shadowColor: null, // 无阴影
+      borderColor: null, // 无边框
+      scale: 1.0,
+    );
+
+    _dragOverlayEntry = OverlayEntry(
+      builder: (BuildContext context) {
+        return IgnorePointer(
+          ignoring: true,
+          child: SizedBox.expand(
+            child: ValueListenableBuilder<Offset?>(
+              valueListenable: _overlayPositionNotifier,
+              builder: (BuildContext context, Offset? position, Widget? child) {
+                if (position == null) {
+                  return const SizedBox.shrink();
+                }
+                return Stack(
+                  children: <Widget>[
+                    Positioned(
+                      left: position.dx,
+                      top: position.dy,
+                      child: child!,
+                    ),
+                  ],
+                );
+              },
+              child: badge,
+            ),
+          ),
+        );
+      },
+    );
+
+    overlayState.insert(_dragOverlayEntry!);
+  }
+
+  void _updateOverlayForPointer(Offset pointerGlobalPosition) {
+    if (_dragOverlayEntry == null || _overlayLockedToTarget) {
+      return;
+    }
+    // 让字母中心对齐到拖拽点
+    final double fixedY =
+        _fixedVerticalPosition ?? (pointerGlobalPosition.dy - _badgeSize / 2);
+
+    final Offset topLeft = Offset(
+      pointerGlobalPosition.dx - _badgeSize / 2, // 水平方向：字母中心对齐到拖拽点
+      fixedY, // 垂直方向：保持固定位置
+    );
+    _overlayPositionNotifier.value = topLeft;
+  }
+
+  void _lockOverlayToTarget(Rect targetRect) {
+    if (_dragOverlayEntry == null) {
+      return;
+    }
+    _overlayLockedToTarget = true;
+    // 吸附时让拖拽项稍微偏移目标区域，避免在不同分辨率设备上重叠
+    final double targetCenterX = targetRect.center.dx;
+    final double targetCenterY = targetRect.center.dy;
+    // 让拖拽字母的中心与目标字母的中心对齐，但稍微向上偏移避免重叠
+    final Offset topLeft = Offset(
+      targetCenterX - _badgeSize / 2, // 水平居中
+      targetCenterY - _badgeSize / 2, // 向上偏移10像素，避免重叠
+    );
+    _overlayPositionNotifier.value = topLeft;
+    _setAutoSnapped(true);
+  }
+
+  void _unlockOverlay() {
+    if (!_overlayLockedToTarget) {
+      return;
+    }
+    _overlayLockedToTarget = false;
+    _setAutoSnapped(false);
+  }
+
+  void _removeOverlay() {
+    _overlayLockedToTarget = false;
+    _overlayPositionNotifier.value = null;
+    _dragOverlayEntry?.remove();
+    _dragOverlayEntry = null;
+  }
+
+  void _handleDragMovement(Offset pointerGlobalPosition) {
+    _latestGlobalDragPosition = pointerGlobalPosition;
+
+    if (_dragOverlayEntry != null && !_overlayLockedToTarget) {
+      _updateOverlayForPointer(pointerGlobalPosition);
+    }
+
+    final Rect? targetRect = _getTargetRect();
+    if (targetRect == null) {
+      _unlockOverlay();
+      _setLetterCovering(false);
+      return;
+    }
+
+    if (_isNearTarget(pointerGlobalPosition, targetRect)) {
+      _lockOverlayToTarget(targetRect);
+      _setLetterCovering(true);
+    } else {
+      final bool wasLocked = _overlayLockedToTarget;
+      if (wasLocked) {
+        _unlockOverlay();
+        _updateOverlayForPointer(pointerGlobalPosition);
+      }
+      final bool covering = _isCoveringTarget(pointerGlobalPosition);
+      _setLetterCovering(covering);
+    }
+  }
+
+  void _handleDragUpdate(DragUpdateDetails details) {
+    _handleDragMovement(details.globalPosition);
+  }
+
+  void _handleDragEnd(DraggableDetails details) {
+    final Offset? lastPosition = _latestGlobalDragPosition;
+    final bool covering =
+        lastPosition != null && _isCoveringTarget(lastPosition);
+    final bool matched = (_isAutoSnapped || covering) && !_hasMatched;
+
+    if (mounted) {
+      setState(() {
+        _isDragging = false;
+        _isLetterCoveringTarget = false;
+        _isAutoSnapped = false;
+        if (matched) {
+          _hasMatched = true;
+        }
+      });
+    }
+
+    if (matched) {
+      widget.onLetterMatched(widget.expectedLetter);
+    }
+
+    _removeOverlay();
+    _currentDraggingColor = null;
+    _dragPointerOffset = null;
+    _latestGlobalDragPosition = null;
+    _fixedVerticalPosition = null; // 重置固定垂直位置
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final String letter = widget.expectedLetter.trim();
+    if (letter.isEmpty) {
+      return Center(
+        child: Text(
+          '等待下一项...',
+          style: TextStyle(
+            fontSize: 18,
+            color: Colors.grey.shade500,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+      );
+    }
+
+    final bool completed = widget.isCompleted || _hasMatched;
+    final String displayLetter = letter.toLowerCase();
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 16.0),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: <Widget>[
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: <Widget>[
+              Expanded(
+                child: Align(
+                  alignment: Alignment.centerRight,
+                  child: _buildSource(displayLetter, completed),
+                ),
+              ),
+              const SizedBox(width: 24),
+              SizedBox(
+                width: 140,
+                child: Center(
+                  child: _DashedLine(
+                    color: completed
+                        ? widget.activeColor
+                        : Colors.grey.shade400,
+                    thickness: 1.0,
+                    dashWidth: 6.0,
+                    gapWidth: 4.0,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 24),
+              Expanded(
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: _buildTarget(displayLetter, completed),
+                ),
+              ),
+            ],
+          ),
+        ],
       ),
-      childWhenDragging: const SizedBox.shrink(),
-      child: bubble,
     );
   }
 
-  Widget _buildDragFeedback(
-    String label,
-    Color baseColor,
-    double baseItemSize,
-    double visualScale,
-    bool isCorrect, {
-    bool isWordOption = false,
-  }) {
-    final double displaySize = baseItemSize * visualScale;
-    // 增大拖拽 feedback 的最小尺寸，使拖拽时文字更大更显眼
-    final double feedbackSize = max(displaySize, 140.0);
+  Widget _buildSource(String letter, bool completed) {
+    // 拖拽区不使用圆形背景，只显示文字
+    final Widget badge = _buildLetterBadge(
+      badgeKey: _sourceKey, // 添加key以获取位置
+      letter: letter,
+      background: Colors.transparent, // 透明背景，无圆形背景
+      textColor: Colors.green.shade700,
+      shadowColor: null, // 无阴影
+      borderColor: null, // 无边框
+    );
 
-    // 检查是否为中文字符，根据字符长度调整字体倍数
-    final bool isChinese = _isChineseText(label);
-    final int textLength = label.length;
-
-    // 根据字符长度动态调整字体倍数
-    double baseFontMultiplier = isChinese ? 0.30 : 0.38;
-    if (textLength <= 1) {
-      baseFontMultiplier = isChinese ? 0.38 : 0.46; // 单字可以使用更大的字体
-    } else if (textLength == 2) {
-      baseFontMultiplier = isChinese ? 0.34 : 0.42; // 两字适中
-    } else if (textLength == 3) {
-      baseFontMultiplier = isChinese ? 0.26 : 0.34; // 三字需要缩小
-    } else {
-      baseFontMultiplier = isChinese ? 0.22 : 0.30; // 四字及以上进一步缩小
+    if (completed) {
+      return badge;
     }
 
-    // feedback 时适当放大字体倍数，且基于 feedbackSize 计算最终字体
-    double fontMultiplier = baseFontMultiplier * 1.15;
-    if (isWordOption) fontMultiplier *= 1.40; // 单词反馈更大些
-    final double maxFeedbackFont = isWordOption ? 88.0 : 64.0;
-    final double fontSize = (widget.baseFontSize != null && isWordOption)
-        ? widget.baseFontSize!.clamp(18.0, maxFeedbackFont)
-        : (feedbackSize * fontMultiplier).clamp(18.0, maxFeedbackFont);
+    return Listener(
+      behavior: HitTestBehavior.opaque,
+      onPointerDown: (PointerDownEvent event) {
+        _dragPointerOffset = event.localPosition;
+        _latestGlobalDragPosition = event.position;
+      },
+      onPointerMove: (PointerMoveEvent event) {
+        _latestGlobalDragPosition = event.position;
+        if (_isDragging) {
+          _handleDragMovement(event.position);
+        }
+      },
+      child: Draggable<String>(
+        axis: Axis.horizontal,
+        dragAnchorStrategy: childDragAnchorStrategy,
+        data: widget.expectedLetter,
+        feedbackOffset: _defaultFeedbackOffset,
+        feedback: const SizedBox.shrink(),
+        onDragStarted: () {
+          // 获取源位置的垂直位置并固定
+          final RenderBox? sourceBox =
+              _sourceKey.currentContext?.findRenderObject() as RenderBox?;
+          if (sourceBox != null) {
+            final Offset sourceTopLeft = sourceBox.localToGlobal(Offset.zero);
+            _fixedVerticalPosition = sourceTopLeft.dy;
+          }
 
-    return Material(
-      type: MaterialType.transparency,
-      child: isWordOption
-          ? IntrinsicWidth(
-              child: Container(
-                constraints: BoxConstraints(
-                  minWidth: feedbackSize * 0.8,
-                  maxWidth: feedbackSize * 1.2, // 限制最大宽度，避免超出边框
-                  minHeight: feedbackSize * 0.7,
-                  maxHeight: feedbackSize * 0.7,
-                ),
-                decoration: BoxDecoration(
-                  shape: BoxShape.rectangle,
-                  borderRadius: BorderRadius.circular(16),
-                  gradient: LinearGradient(
-                    colors: <Color>[
-                      baseColor.withOpacity(0.95),
-                      baseColor.withOpacity(0.72),
-                    ],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                  ),
-                  boxShadow: <BoxShadow>[
-                    BoxShadow(
-                      color: baseColor.withOpacity(0.45),
-                      blurRadius: 26,
-                      offset: const Offset(0, 12),
-                    ),
-                  ],
-                  border: Border.all(color: Colors.white, width: 4),
-                ),
-                alignment: Alignment.center,
-                padding: const EdgeInsets.symmetric(horizontal: 20),
-                child: FittedBox(
-                  fit: BoxFit.scaleDown,
-                  child: Text(
-                    label.toLowerCase(),
-                    style: TextStyle(
-                      fontSize: fontSize,
-                      fontWeight: FontWeight.w900,
-                      letterSpacing: isChinese ? 0.0 : 1.4, // 中文不需要字母间距
-                      color: Colors.white,
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-              ),
+          _ensureOverlay(letter);
+          setState(() {
+            _isDragging = true;
+            _isLetterCoveringTarget = false;
+            _isAutoSnapped = false;
+            _currentDraggingColor = widget.activeColor;
+            _overlayLockedToTarget = false;
+          });
+          if (_latestGlobalDragPosition != null) {
+            // 设置初始位置，让字母中心对齐到拖拽点
+            final double fixedY =
+                _fixedVerticalPosition ??
+                (_latestGlobalDragPosition!.dy - _badgeSize / 2);
+            final Offset initialTopLeft = Offset(
+              _latestGlobalDragPosition!.dx - _badgeSize / 2, // 水平方向：字母中心对齐到拖拽点
+              fixedY, // 垂直方向：保持固定位置
+            );
+            _overlayPositionNotifier.value = initialTopLeft;
+            _handleDragMovement(_latestGlobalDragPosition!);
+          }
+        },
+        onDragUpdate: _handleDragUpdate,
+        onDragEnd: _handleDragEnd,
+        childWhenDragging: Opacity(opacity: 0.25, child: badge),
+        child: AnimatedOpacity(
+          duration: const Duration(milliseconds: 180),
+          opacity: _isDragging ? 0.8 : 1.0,
+          child: badge,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTarget(String letter, bool completed) {
+    return DragTarget<String>(
+      onWillAccept: (String? value) {
+        if (completed) return false;
+        if (value == null) return false;
+        return value.toLowerCase() == widget.expectedLetter.toLowerCase();
+      },
+      onAccept: (_) {},
+      builder:
+          (
+            BuildContext context,
+            List<String?> candidateData,
+            List<dynamic> rejectedData,
+          ) {
+            Color background;
+            Color textColor;
+            Color? borderColor;
+            Color? shadowColor;
+
+            // 拖拽成功后切换下一个字母时，直接切换，不要圆形背景和颜色
+            background = Colors.transparent;
+            textColor = Colors.grey.shade600;
+            borderColor = null;
+            shadowColor = null;
+
+            return _buildLetterBadge(
+              badgeKey: _targetKey,
+              letter: letter,
+              background: background,
+              textColor: textColor,
+              borderColor: borderColor,
+              shadowColor: shadowColor,
+            );
+          },
+    );
+  }
+
+  Widget _buildLetterBadge({
+    Key? badgeKey,
+    required String letter,
+    required Color background,
+    required Color textColor,
+    Color? borderColor,
+    Color? shadowColor,
+    double scale = 1.0,
+  }) {
+    final double size = _badgeSize * scale;
+
+    // 如果背景是透明的，不显示圆形背景
+    final bool hasBackground =
+        background != Colors.transparent && background.alpha != 0;
+
+    return AnimatedContainer(
+      key: badgeKey,
+      duration: const Duration(milliseconds: 200),
+      width: size,
+      height: size,
+      alignment: Alignment.center,
+      decoration: hasBackground
+          ? BoxDecoration(
+              color: background,
+              shape: BoxShape.circle,
+              border: borderColor != null
+                  ? Border.all(color: borderColor, width: 2.0)
+                  : null,
+              boxShadow: shadowColor != null
+                  ? <BoxShadow>[
+                      BoxShadow(
+                        color: shadowColor,
+                        blurRadius: 8.0,
+                        offset: const Offset(0, 2),
+                      ),
+                    ]
+                  : null,
             )
-          : Container(
-              width: feedbackSize,
-              height: feedbackSize,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                gradient: LinearGradient(
-                  colors: <Color>[
-                    baseColor.withOpacity(0.95),
-                    baseColor.withOpacity(0.72),
-                  ],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
-                boxShadow: <BoxShadow>[
-                  BoxShadow(
-                    color: baseColor.withOpacity(0.45),
-                    blurRadius: 26,
-                    offset: const Offset(0, 12),
-                  ),
-                ],
-                border: Border.all(color: Colors.white, width: 4),
-              ),
-              alignment: Alignment.center,
-              child: FittedBox(
-                fit: BoxFit.scaleDown,
-                child: Text(
-                  label.toLowerCase(),
-                  style: TextStyle(
-                    fontSize: fontSize,
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: isChinese ? 0.0 : 1.4,
-                    color: Colors.white,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-            ),
+          : null, // 透明背景时不设置decoration
+      child: Text(
+        letter,
+        style: GoogleFonts.kalam(
+          fontSize: size * 0.55,
+          fontWeight: FontWeight.w900,
+          color: textColor,
+          letterSpacing: 0.8,
+          decoration: TextDecoration.none, // 确保没有下划线
+        ),
+      ),
     );
   }
 }
